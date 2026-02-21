@@ -694,7 +694,7 @@ async def gather_formulary_data(client: httpx.AsyncClient, drug_name: str, drug_
 # ===========================================================================
 # CONTROLLED DRUG CHECK
 # ===========================================================================
-def check_controlled_drug(drug_name: str, bnf_data: dict) -> dict:
+def check_controlled_drug(drug_name: str, bnf_data: dict, supplementary_text: str = "") -> dict:
     """Check if drug is a controlled drug using multiple strategies."""
     result = {"is_controlled": False, "schedule": None, "description": ""}
 
@@ -720,6 +720,16 @@ def check_controlled_drug(drug_name: str, bnf_data: dict) -> dict:
                 result["source"] = "BNF page"
                 return result
 
+    # Strategy 3: Uploaded documents
+    if supplementary_text and "controlled drug" in supplementary_text.lower():
+        result["is_controlled"] = True
+        match = re.search(r"schedule\s+(\d)", supplementary_text, re.IGNORECASE)
+        if match:
+            result["schedule"] = int(match.group(1))
+            result["description"] = f"Schedule {result['schedule']} Controlled Drug"
+        result["source"] = "Uploaded document"
+        return result
+
     result["description"] = "Not a Controlled Drug"
     return result
 
@@ -727,7 +737,7 @@ def check_controlled_drug(drug_name: str, bnf_data: dict) -> dict:
 # ===========================================================================
 # ANALYSIS — CONTRAINDICATIONS & ICD-10 MAPPING
 # ===========================================================================
-def analyze_contraindications(bnf_data: dict, emc_data: dict, kb: KnowledgeBase) -> list[dict]:
+def analyze_contraindications(bnf_data: dict, emc_data: dict, kb: KnowledgeBase, supplementary_text: str = "") -> list[dict]:
     """Extract contraindications and cautions, map to ICD-10."""
     items = []
 
@@ -791,6 +801,34 @@ def analyze_contraindications(bnf_data: dict, emc_data: dict, kb: KnowledgeBase)
                     "source": "EMC SmPC 4.3",
                     "pics_message_code": "[TO BE COMPLETED]",
                 })
+
+    # Extract from uploaded documents
+    if supplementary_text:
+        # Look for contraindication/caution sections in uploaded PDFs
+        for pattern, ci_type, level in [
+            (r"(?:contraindicated?\s+in|must\s+not\s+be\s+(?:used|given|administered)\s+(?:in|to|if))\s+(.+?)(?:\.|$)", "contraindication", 2),
+            (r"(?:caution\s+(?:in|with|if)|use\s+with\s+caution\s+in)\s+(.+?)(?:\.|$)", "caution", 1),
+        ]:
+            matches = re.findall(pattern, supplementary_text, re.IGNORECASE | re.MULTILINE)
+            for cond in matches:
+                cond = cond.strip()
+                if len(cond) < 5 or len(cond) > 200:
+                    continue
+                already = any(
+                    cond.lower()[:20] in item["condition"].lower()
+                    for item in items
+                )
+                if not already:
+                    icd_map = kb.find_icd10_mapping(cond)
+                    items.append({
+                        "type": ci_type,
+                        "condition": cond,
+                        "icd10_code": icd_map["icd10_code"] if icd_map else "[NEEDS ICD-10 MAPPING]",
+                        "description": f"{ci_type}: {cond}",
+                        "warning_level": level,
+                        "source": "Uploaded document",
+                        "pics_message_code": "[TO BE COMPLETED]",
+                    })
 
     return items
 
@@ -900,7 +938,7 @@ def analyze_interactions(
 # ===========================================================================
 # ANALYSIS — DOSE LIMITS
 # ===========================================================================
-def extract_dose_limits(bnf_data: dict, emc_data: dict) -> dict:
+def extract_dose_limits(bnf_data: dict, emc_data: dict, supplementary_text: str = "") -> dict:
     """Extract dose limits from BNF and EMC data.
 
     Parses the BNF indications_and_dose section which uses pipe-separated
@@ -1022,7 +1060,7 @@ def extract_dose_limits(bnf_data: dict, emc_data: dict) -> dict:
         r"(?:max(?:imum)?\.?\s*(?:total|per\s*(?:24|day)))[:\s]*(\d+[\.\d]*\s*(?:mg|g|mcg|ml|units?))",
     ]
     for pattern in max_patterns:
-        for text in [dose_text, emc_dose]:
+        for text in [dose_text, emc_dose, supplementary_text]:
             matches = re.findall(pattern, text, re.IGNORECASE)
             for m in matches:
                 result["adult"].append({"max_dose": m, "source": "BNF/EMC"})
@@ -1033,7 +1071,7 @@ def extract_dose_limits(bnf_data: dict, emc_data: dict) -> dict:
 # ===========================================================================
 # ANALYSIS — RESULT WARNINGS
 # ===========================================================================
-def extract_result_warnings(bnf_data: dict, emc_data: dict) -> list[dict]:
+def extract_result_warnings(bnf_data: dict, emc_data: dict, supplementary_text: str = "") -> list[dict]:
     """Extract result-based warnings (eGFR, ALT, etc.) and format as PICS syntax."""
     warnings = []
     texts = [
@@ -1042,6 +1080,7 @@ def extract_result_warnings(bnf_data: dict, emc_data: dict) -> list[dict]:
         bnf_data.get("monitoring_requirements", "") or "",
         emc_data.get("4.4_special_warnings", "") or "",
         emc_data.get("4.2_posology", "") or "",
+        supplementary_text,
     ]
 
     combined = " ".join(texts)
@@ -1177,7 +1216,7 @@ def _form_to_routes(form_name: str) -> list[str]:
 # ===========================================================================
 # ANALYSIS — UNCONDITIONAL MESSAGES
 # ===========================================================================
-def extract_unconditional_messages(bnf_data: dict, emc_data: dict) -> list[dict]:
+def extract_unconditional_messages(bnf_data: dict, emc_data: dict, supplementary_text: str = "") -> list[dict]:
     """Extract messages that should always be displayed (no trigger condition).
 
     Filters out BNF navigation/reference text and only keeps genuine clinical messages.
@@ -1318,6 +1357,34 @@ def extract_unconditional_messages(bnf_data: dict, emc_data: dict) -> list[dict]
                 "source": "EMC 4.4",
             })
 
+    # Extract key warnings from uploaded documents
+    if supplementary_text:
+        doc_patterns = [
+            r"((?:must|should)\s+(?:not\s+)?be\s+(?:withdrawn|stopped|discontinued)\s+(?:suddenly|abruptly)[\w\s,.]*)",
+            r"((?:do\s+not\s+(?:crush|chew|break|split|halve))[\w\s,.]*)",
+            r"((?:swallow|take)\s+(?:whole|with\s+(?:water|food|plenty))[\w\s,.]*)",
+            r"((?:patients?\s+should\s+be\s+(?:advised|warned|told|counselled)\s+[\w\s,.]{10,}))",
+            r"((?:black\s+triangle|additional\s+monitoring|▼)[\w\s,.]*)",
+            r"((?:MHRA|NPSA|patient\s+safety)\s+(?:alert|warning|advice)[:\s]+[\w\s,.]{10,})",
+        ]
+        for pattern in doc_patterns:
+            matches = re.findall(pattern, supplementary_text, re.IGNORECASE)
+            for m in matches:
+                m = m.strip()
+                if len(m) < 15 or len(m) > 300:
+                    continue
+                # Check not already captured
+                already = any(m[:30].lower() in msg["message"].lower() for msg in messages)
+                if not already:
+                    messages.append({
+                        "message": m[:200],
+                        "target": "P",
+                        "form": "ALL",
+                        "warning_level": 1,
+                        "pics_message_code": "[TO BE COMPLETED]",
+                        "source": "Uploaded document",
+                    })
+
     return messages
 
 
@@ -1389,16 +1456,23 @@ async def generate_drugsheet(
     if formulary_data.get("source"):
         drugsheet["references"].append({"source": "Birmingham Formulary", "url": formulary_data["source"], "accessed": today})
 
-    # Phase 2: Analysis
+    # Build combined supplementary text from all uploaded PDFs
+    supplementary_text = ""
+    for doc in drugsheet.get("supplementary_documents", []):
+        text = doc.get("full_text", "")
+        if text:
+            supplementary_text += f"\n--- {doc.get('filename', 'document')} ---\n{text}\n"
+
+    # Phase 2: Analysis (all functions receive supplementary_text from uploaded PDFs)
     _progress("Checking controlled drug status...")
-    drugsheet["controlled_drug"] = check_controlled_drug(drug_name, bnf_data)
+    drugsheet["controlled_drug"] = check_controlled_drug(drug_name, bnf_data, supplementary_text)
 
     _progress("Mapping drug classes...")
     drugsheet["drug_classes"] = kb.find_drug_classes(drug_name)
     drugsheet["tfqav_info"] = kb.get_tfqav_info(drug_name)
 
     _progress("Analyzing contraindications and ICD-10 mappings...")
-    drugsheet["contraindications"] = analyze_contraindications(bnf_data, emc_data, kb)
+    drugsheet["contraindications"] = analyze_contraindications(bnf_data, emc_data, kb, supplementary_text)
 
     _progress("Analyzing interactions...")
     drugsheet["interactions_analysis"] = analyze_interactions(bnf_interactions, bnf_data, emc_data, kb)
@@ -1407,15 +1481,15 @@ async def generate_drugsheet(
     )
 
     _progress("Extracting unconditional messages...")
-    drugsheet["unconditional_messages"] = extract_unconditional_messages(bnf_data, emc_data)
+    drugsheet["unconditional_messages"] = extract_unconditional_messages(bnf_data, emc_data, supplementary_text)
 
     _progress("Extracting result warnings...")
-    drugsheet["result_warnings"] = extract_result_warnings(bnf_data, emc_data)
+    drugsheet["result_warnings"] = extract_result_warnings(bnf_data, emc_data, supplementary_text)
 
     # Phase 3: Dosing & Forms
     _progress("Extracting forms, routes, and dose limits...")
     drugsheet["forms_and_routes"] = extract_forms_and_routes(bnf_data, emc_data, kb)
-    drugsheet["dose_limits"] = extract_dose_limits(bnf_data, emc_data)
+    drugsheet["dose_limits"] = extract_dose_limits(bnf_data, emc_data, supplementary_text)
 
     # Formulary status for amber handling
     _progress("Compiling formulary details...")
