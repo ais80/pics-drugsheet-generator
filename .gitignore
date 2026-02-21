@@ -1,0 +1,37 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+*.egg
+
+# Environment
+.env
+.env.*
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Output (generated files, not source)
+output/
+
+# OS
+Thumbs.db
+.DS_Store
+
+# uv
+uv.lock
+
+# Streamlit
+.streamlit/
+
+# Large binary files
+*.pdf
+*.doc
+*.docx
+
+# Knowledge base (large Excel files - not tracked in git)
+Knowledge base/
