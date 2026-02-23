@@ -1,119 +1,117 @@
-# PICS Drug Sheet Generator — Deployment Guide
+# PICS Drug Sheet Generator — Setup & Deployment Guide
 
-## Overview
+## Quick Start (any computer)
 
-This app runs on **Google Cloud Run** (serverless Docker). You deploy it entirely from a browser using **Google Cloud Shell** — no Python, Node.js, or Docker needed on your local PC.
+### Option 1: Streamlit Cloud (easiest — already deployed)
 
-## Prerequisites
+The app is live at: **https://picsdrugsheetgenerator.streamlit.app**
 
-- A Google Cloud project with billing enabled
-- The `Drugsheets/` folder synced to Google Drive (or available as a zip)
+Nothing to install. Works on any locked-down PC with a browser.
+
+To redeploy after code changes, push to GitHub and Streamlit Cloud auto-updates:
+```bash
+git add -A && git commit -m "your message" && git push origin master
+```
+
+### Option 2: Run locally (requires Python 3.12+)
+
+```bash
+cd Drugsheets/bnf-mcp
+pip install -r requirements.txt
+streamlit run app.py
+```
+
+Opens at http://localhost:8501
+
+### Option 3: Clone from GitHub (any new computer)
+
+```bash
+git clone https://github.com/ais80/pics-drugsheet-generator.git
+cd pics-drugsheet-generator/bnf-mcp
+pip install -r requirements.txt
+streamlit run app.py
+```
 
 ---
 
-## Option A: Deploy from Google Drive (any PC, just a browser)
-
-### 1. Upload to Google Drive
-
-Copy the entire `Drugsheets/` folder to your Google Drive. The key files needed are:
+## Project Structure
 
 ```
 Drugsheets/
-├── Dockerfile
-├── .dockerignore
 ├── bnf-mcp/
-│   ├── pyproject.toml
-│   ├── generate.py
-│   ├── api.py
-│   └── static/
-│       ├── index.html
-│       ├── app.js
-│       └── style.css
-└── Knowledge base/
-    ├── drugsToClasses.xls
-    ├── FormRoute.xlsx
-    ├── ICD10_usage.xlsx
-    ├── TFQavSummary.xlsx
-    └── cleaned/
-        ├── drugs_to_classes.xlsx
-        ├── form_route.xlsx
-        ├── icd10_usage.xlsx
-        └── tfqav_summary.xlsx
+│   ├── app.py              ← Streamlit web app (the deployed app)
+│   ├── generate.py         ← Core engine (scrapes BNF/EMC/Formulary, runs analysis)
+│   ├── requirements.txt    ← Python dependencies for Streamlit Cloud
+│   ├── pyproject.toml      ← Full dependency spec (with optional dev deps)
+│   ├── api.py              ← FastAPI alternative backend (for Cloud Run)
+│   ├── static/             ← FastAPI frontend (alternative to Streamlit)
+│   ├── server.py           ← BNF-Pro MCP server
+│   ├── emc_server.py       ← EMC SmPC MCP server
+│   ├── dmd_server.py       ← dm+d MCP server
+│   └── formulary_server.py ← Birmingham Formulary MCP server
+├── Knowledge base/         ← Source Excel files (drug classes, ICD-10, forms/routes)
+│   └── cleaned/            ← Cleaned versions
+├── Dockerfile              ← Docker build for Cloud Run deployment
+├── .dockerignore
+├── requirements.txt        ← Root-level deps (backup)
+├── CLAUDE.md               ← Project documentation for AI assistants
+└── DEPLOY.md               ← This file
 ```
-
-### 2. Open Google Cloud Shell
-
-Go to https://shell.cloud.google.com in your browser and open a terminal.
-
-### 3. Copy files from Google Drive to Cloud Shell
-
-```bash
-# Mount Google Drive (follow the auth prompt)
-cloudshell dl-auth
-
-# Or: upload a zip file directly via Cloud Shell's "Upload" button (top-right)
-# Then unzip:
-# unzip Drugsheets.zip
-
-# Alternatively, use gcloud storage if you've uploaded to a GCS bucket:
-# gsutil -m cp -r gs://YOUR_BUCKET/Drugsheets .
-```
-
-**Easiest method:** Click the three-dot menu in Cloud Shell > "Upload" > select a zip of the Drugsheets folder.
-
-### 4. Set your project
-
-```bash
-# Replace with your actual project ID
-export PROJECT_ID="your-project-id"
-gcloud config set project $PROJECT_ID
-
-# Enable required APIs (first time only)
-gcloud services enable cloudbuild.googleapis.com run.googleapis.com
-```
-
-### 5. Build and deploy
-
-```bash
-cd Drugsheets
-
-# Build the container image
-gcloud builds submit --tag gcr.io/$PROJECT_ID/pics-drugsheet-generator .
-
-# Deploy to Cloud Run (London region)
-gcloud run deploy pics-drugsheet-generator \
-    --image gcr.io/$PROJECT_ID/pics-drugsheet-generator \
-    --platform managed \
-    --region europe-west2 \
-    --allow-unauthenticated \
-    --memory 1Gi \
-    --cpu 1 \
-    --timeout 300 \
-    --max-instances 5 \
-    --min-instances 0 \
-    --port 8080
-```
-
-### 6. Get the URL
-
-After deployment, Cloud Run prints the service URL:
-```
-Service URL: https://pics-drugsheet-generator-xxxx-nw.a.run.app
-```
-
-Share this URL with colleagues — they just need a browser.
 
 ---
 
-## Option B: Deploy from a local machine with gcloud CLI
+## Transferring to Another Computer
 
-If you have `gcloud` CLI installed locally:
+### Via Google Drive
+1. Copy the entire `Drugsheets/` folder to Google Drive
+2. On the new PC, download it
+3. Open a terminal in `Drugsheets/bnf-mcp/` and run:
+   ```bash
+   pip install -r requirements.txt
+   streamlit run app.py
+   ```
 
+### Via GitHub
 ```bash
-cd G:/Documents/PICS/Drugsheets
+git clone https://github.com/ais80/pics-drugsheet-generator.git
+cd pics-drugsheet-generator/bnf-mcp
+pip install -r requirements.txt
+streamlit run app.py
+```
 
-export PROJECT_ID="your-project-id"
-gcloud config set project $PROJECT_ID
+### Via USB / zip
+Just copy the folder. All dependencies are listed in `requirements.txt` — run `pip install -r requirements.txt` on the new machine.
+
+---
+
+## Streamlit Cloud Deployment
+
+The app is deployed via https://share.streamlit.io connected to the GitHub repo.
+
+**Settings:**
+- Repository: `ais80/pics-drugsheet-generator`
+- Branch: `master`
+- Main file path: `bnf-mcp/app.py`
+
+**To update:** Push changes to GitHub. Streamlit Cloud auto-redeploys.
+
+**To redeploy manually:** Go to https://share.streamlit.io > your app > "Reboot app"
+
+---
+
+## Google Cloud Run Deployment (alternative)
+
+For a Docker-based deployment (heavier, but more control):
+
+### 1. Rename Knowledge base folder (Docker can't handle spaces)
+```bash
+mv "Knowledge base" Knowledge_base
+```
+
+### 2. Build and deploy
+```bash
+export PROJECT_ID="pics-drugsheet"
+gcloud services enable cloudbuild.googleapis.com run.googleapis.com
 
 gcloud builds submit --tag gcr.io/$PROJECT_ID/pics-drugsheet-generator .
 
@@ -126,46 +124,30 @@ gcloud run deploy pics-drugsheet-generator \
 
 ---
 
-## Local Development (optional, requires Python 3.12+)
+## Development
 
+### Install dev dependencies (includes MCP servers, docx support)
 ```bash
 cd Drugsheets/bnf-mcp
-
-# Install dependencies
 pip install -e ".[dev]"
-# or with uv:
-uv pip install -e ".[dev]"
-
-# Run the web app
-uvicorn api:app --reload --port 8080
-
-# Open http://localhost:8080
 ```
 
----
+### Run MCP servers locally
+```bash
+uv run server.py        # BNF-Pro
+uv run emc_server.py    # EMC SmPC
+uv run dmd_server.py    # dm+d
+uv run formulary_server.py  # Birmingham Formulary
+```
 
-## Updating the App
-
-After making changes to any files:
-
+### Push changes
 ```bash
 cd Drugsheets
-
-# Rebuild and redeploy (same commands as initial deploy)
-gcloud builds submit --tag gcr.io/$PROJECT_ID/pics-drugsheet-generator .
-gcloud run deploy pics-drugsheet-generator \
-    --image gcr.io/$PROJECT_ID/pics-drugsheet-generator \
-    --platform managed --region europe-west2
+git add -A
+git commit -m "description of changes"
+git push origin master
 ```
-
----
-
-## Costs
-
-- **Cloud Run**: Pay per request. Free tier covers ~2 million requests/month
-- **Cloud Build**: 120 free build-minutes/day
-- **Container Registry**: Minimal storage cost (~200MB image)
-- **Estimated cost**: Near-zero for typical internal NHS use
+Streamlit Cloud auto-redeploys after push.
 
 ---
 
@@ -173,8 +155,8 @@ gcloud run deploy pics-drugsheet-generator \
 
 | Issue | Fix |
 |---|---|
-| Build fails on `Knowledge base/` | Ensure the folder (with space in name) is present and .dockerignore doesn't exclude it |
-| Generation times out (>300s) | Increase `--timeout` in deploy command |
-| Out of memory | Increase `--memory` to `2Gi` |
-| Can't access URL | Check `--allow-unauthenticated` was set, or configure IAM |
-| Progress bar stuck | Check Cloud Run logs: `gcloud run logs read pics-drugsheet-generator` |
+| `ModuleNotFoundError` | Run `pip install -r requirements.txt` |
+| Streamlit Cloud deploy fails | Check `bnf-mcp/requirements.txt` has all deps |
+| Knowledge base not found | Ensure `Knowledge base/` folder is present with Excel files |
+| Generation times out | BNF/EMC websites may be slow — retry |
+| Progress bar stuck | Check terminal for errors |
