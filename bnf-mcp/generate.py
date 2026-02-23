@@ -247,6 +247,51 @@ class KnowledgeBase:
 
 
 # ===========================================================================
+# RESILIENT FETCH — retry via proxies when blocked (403)
+# ===========================================================================
+_DEFAULT_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                  "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "en-GB,en;q=0.9",
+}
+
+# Free web proxy services (HTML proxy pages that fetch on our behalf)
+_PROXY_TEMPLATES = [
+    "https://api.allorigins.win/raw?url={url}",
+    "https://corsproxy.io/?{url}",
+    "https://api.codetabs.com/v1/proxy?quest={url}",
+]
+
+
+async def _resilient_get(
+    client: httpx.AsyncClient, url: str, headers: dict | None = None
+) -> httpx.Response | None:
+    """Try direct fetch first; if blocked (403/406), retry via proxy services."""
+    hdrs = headers or _DEFAULT_HEADERS
+
+    # Attempt 1: direct request
+    try:
+        resp = await client.get(url, headers=hdrs, follow_redirects=True, timeout=20.0)
+        if resp.status_code == 200:
+            return resp
+    except Exception:
+        pass
+
+    # Attempt 2+: try each proxy
+    for template in _PROXY_TEMPLATES:
+        proxy_url = template.format(url=url)
+        try:
+            resp = await client.get(proxy_url, headers=hdrs, follow_redirects=True, timeout=20.0)
+            if resp.status_code == 200 and len(resp.text) > 500:
+                return resp
+        except Exception:
+            continue
+
+    return None
+
+
+# ===========================================================================
 # DATA GATHERING — BNF
 # ===========================================================================
 async def gather_bnf_data(client: httpx.AsyncClient, drug_name: str) -> dict:
@@ -262,10 +307,10 @@ async def gather_bnf_data(client: httpx.AsyncClient, drug_name: str) -> dict:
     result = {"source": url, "drug": drug_name, "status": "pending"}
 
     try:
-        resp = await client.get(url, headers=headers, follow_redirects=True, timeout=20.0)
-        if resp.status_code != 200:
+        resp = await _resilient_get(client, url, headers)
+        if resp is None:
             result["status"] = "not_found"
-            result["error"] = f"HTTP {resp.status_code}"
+            result["error"] = "All fetch attempts failed (site may be blocking cloud IPs)"
             return result
 
         soup = BeautifulSoup(resp.text, "html.parser")
@@ -347,8 +392,9 @@ async def gather_bnf_interactions(client: httpx.AsyncClient, drug_name: str) -> 
     result = {"source": url, "interactions": []}
 
     try:
-        resp = await client.get(url, headers=headers, follow_redirects=True, timeout=20.0)
-        if resp.status_code != 200:
+        resp = await _resilient_get(client, url, headers)
+        if resp is None:
+            result["error"] = "All fetch attempts failed (site may be blocking cloud IPs)"
             return result
 
         soup = BeautifulSoup(resp.text, "html.parser")
@@ -463,7 +509,11 @@ async def gather_emc_data(client: httpx.AsyncClient, drug_name: str) -> dict:
 
     try:
         # 1. Search
-        search_resp = await client.get(search_url, headers=headers, follow_redirects=True, timeout=20.0)
+        search_resp = await _resilient_get(client, search_url, headers)
+        if search_resp is None:
+            result["status"] = "not_found"
+            result["error"] = "All fetch attempts failed (site may be blocking cloud IPs)"
+            return result
         soup = BeautifulSoup(search_resp.text, "html.parser")
 
         # Find first SmPC product link (class name varies, use href pattern)
@@ -483,7 +533,11 @@ async def gather_emc_data(client: httpx.AsyncClient, drug_name: str) -> dict:
         result["product_name"] = smpc_links[0].get_text(strip=True)
 
         # 2. Fetch SmPC
-        smpc_resp = await client.get(product_url, headers=headers, follow_redirects=True, timeout=20.0)
+        smpc_resp = await _resilient_get(client, product_url, headers)
+        if smpc_resp is None:
+            result["status"] = "partial"
+            result["error"] = "SmPC page fetch failed"
+            return result
         smpc_soup = BeautifulSoup(smpc_resp.text, "html.parser")
 
         result["status"] = "ok"
@@ -536,9 +590,10 @@ async def gather_formulary_data(client: httpx.AsyncClient, drug_name: str, drug_
     result = {"drug": drug_name, "status": "pending", "all_entries": []}
 
     try:
-        resp = await client.get(search_url, headers=headers, follow_redirects=True, timeout=20.0)
-        if resp.status_code != 200:
+        resp = await _resilient_get(client, search_url, headers)
+        if resp is None:
             result["status"] = "error"
+            result["error"] = "All fetch attempts failed (site may be blocking cloud IPs)"
             return result
 
         soup = BeautifulSoup(resp.text, "html.parser")
