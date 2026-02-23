@@ -8,13 +8,16 @@ import asyncio
 import json
 import os
 import re
+import warnings
 from datetime import date
 from pathlib import Path
 
 import httpx
 import pandas as pd
 import pdfplumber
-from bs4 import BeautifulSoup
+from bs4 import BeautifulSoup, MarkupResemblesLocatorWarning
+
+warnings.filterwarnings("ignore", category=MarkupResemblesLocatorWarning)
 
 # ---------------------------------------------------------------------------
 # Paths
@@ -385,78 +388,157 @@ async def _resilient_get(
 
 
 # ===========================================================================
-# DATA GATHERING — BNF
+# DATA GATHERING — BNF (via Gatsby JSON API, no HTML scraping needed)
 # ===========================================================================
-async def gather_bnf_data(client: httpx.AsyncClient, drug_name: str) -> dict:
-    """Scrape BNF drug page for clinical data."""
-    slug = drug_name.lower().replace(" ", "-")
-    url = f"https://bnf.nice.org.uk/drugs/{slug}/"
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        "Accept-Language": "en-GB,en;q=0.9",
-    }
+def _extract_bnf_section_text(section: dict | None) -> str:
+    """Extract plain text from a BNF section dict (drugClassContent + drugContent).
 
-    result = {"source": url, "drug": drug_name, "status": "pending"}
+    Handles multiple BNF JSON content patterns:
+    - Most sections: ``{"content": "<p>HTML...</p>"}``
+    - monitoringRequirements: ``{"monitoringOfPatientParameters": "<p>..."}``
+    - indicationsAndDose: ``{"indicationAndDoseGroups": [...]}`` with
+      ``doseStatement`` directly on each patientGroup dict (older API) or
+      inside a nested ``detailedDoses`` list (newer API).
+    """
+    if not section:
+        return ""
+    parts = []
+    # Fields that can contain HTML content strings (besides "content")
+    _HTML_CONTENT_FIELDS = (
+        "content",
+        "monitoringOfPatientParameters",
+        "patientMonitoringProgrammes",
+        "therapeuticDrugMonitoring",
+    )
+    for field in ["drugClassContent", "drugContent", "prepContent"]:
+        val = section.get(field)
+        if not val:
+            continue
+        # Can be a list of dicts or a single dict
+        items = val if isinstance(val, list) else [val]
+        for item in items:
+            if isinstance(item, dict):
+                # Extract all known HTML content fields
+                for cf in _HTML_CONTENT_FIELDS:
+                    content = item.get(cf, "")
+                    if content:
+                        soup = BeautifulSoup(content, "html.parser")
+                        parts.append(soup.get_text(separator=" ", strip=True))
+                # indicationAndDoseGroups (nested structure)
+                for group in item.get("indicationAndDoseGroups", []):
+                    for rpg in group.get("routesAndPatientGroups", []):
+                        route = rpg.get("routeOfAdministration", "")
+                        for pg in rpg.get("patientGroups", []):
+                            age = pg.get("patientGroup", "")
+                            # Newer API: detailedDoses list
+                            detailed = pg.get("detailedDoses") or []
+                            if detailed:
+                                for dose in detailed:
+                                    indication = dose.get("indication", "")
+                                    dose_text = dose.get("doseStatement", "")
+                                    if dose_text:
+                                        soup = BeautifulSoup(dose_text, "html.parser")
+                                        parts.append(f"{route} | {age} | {indication}: {soup.get_text(strip=True)}")
+                            else:
+                                # Older API: doseStatement directly on patientGroup
+                                dose_text = pg.get("doseStatement", "")
+                                if dose_text:
+                                    soup = BeautifulSoup(dose_text, "html.parser")
+                                    parts.append(f"{route} | {age}: {soup.get_text(strip=True)}")
+                # Dose adjustments
+                for adj_field in ["doseAdjustments", "extremesOfBodyWeight", "doseEquivalence", "potency"]:
+                    adj = item.get(adj_field)
+                    if adj:
+                        soup = BeautifulSoup(str(adj), "html.parser")
+                        parts.append(soup.get_text(separator=" ", strip=True))
+            elif isinstance(item, str):
+                parts.append(item)
+    return " | ".join(p for p in parts if p)
+
+
+async def gather_bnf_data(client: httpx.AsyncClient, drug_name: str) -> dict:
+    """Fetch BNF drug data via the Gatsby JSON API (page-data endpoint).
+
+    This is much more reliable than HTML scraping as it returns structured JSON
+    and works from cloud servers where HTML pages may return 403.
+    """
+    slug = drug_name.lower().replace(" ", "-")
+    json_url = f"https://bnf.nice.org.uk/page-data/drugs/{slug}/page-data.json"
+    html_url = f"https://bnf.nice.org.uk/drugs/{slug}/"
+
+    result = {"source": html_url, "drug": drug_name, "status": "pending"}
 
     try:
-        resp = await _resilient_get(client, url, headers)
+        resp = await _resilient_get(client, json_url)
         if resp is None:
             result["status"] = "not_found"
-            result["error"] = "All fetch attempts failed (site may be blocking cloud IPs)"
+            result["error"] = "BNF JSON API not reachable"
             return result
 
-        soup = BeautifulSoup(resp.text, "html.parser")
+        data = resp.json()
+        drug = data.get("result", {}).get("data", {}).get("bnfDrug", {})
+        if not drug:
+            result["status"] = "not_found"
+            return result
+
         result["status"] = "ok"
+        result["title"] = drug.get("title", drug_name)
 
-        # BNF uses h2 headings (no section IDs on divs). Extract content
-        # between consecutive h2 tags.
-        h2_map = {}  # heading text -> content
-        all_h2 = soup.find_all("h2")
-        for i, h2 in enumerate(all_h2):
-            heading = h2.get_text(strip=True).lower()
-            # Collect all siblings until the next h2
-            content_parts = []
-            for sibling in h2.find_next_siblings():
-                if sibling.name == "h2":
-                    break
-                text = sibling.get_text(separator=" | ", strip=True)
-                if text:
-                    content_parts.append(text)
-            h2_map[heading] = " | ".join(content_parts)
-
-        # Map BNF headings to our keys
-        heading_to_key = {
-            "indications and dose": "indications_and_dose",
-            "contraindications": "contraindications",
+        # Map BNF JSON keys to our internal keys
+        section_map = {
+            "indicationsAndDose": "indications_and_dose",
+            "contraIndications": "contraindications",
             "cautions": "cautions",
-            "interactions": "interactions",
-            "side-effects": "side_effects",
+            "sideEffects": "side_effects",
             "pregnancy": "pregnancy",
-            "breast feeding": "breast_feeding",
-            "hepatic impairment": "hepatic_impairment",
-            "renal impairment": "renal_impairment",
-            "monitoring requirements": "monitoring_requirements",
-            "prescribing and dispensing information": "prescribing_and_dispensing",
-            "directions for administration": "directions_for_administration",
-            "medicinal forms": "medicinal_forms",
-            "allergy and cross-sensitivity": "allergy_cross_sensitivity",
-            "important safety information": "important_safety",
-            "unlicensed use": "unlicensed_use",
-            "patient and carer advice": "patient_carer_advice",
-            "drug action": "drug_action",
+            "breastFeeding": "breast_feeding",
+            "hepaticImpairment": "hepatic_impairment",
+            "renalImpairment": "renal_impairment",
+            "monitoringRequirements": "monitoring_requirements",
+            "prescribingAndDispensingInformation": "prescribing_and_dispensing",
+            "directionsForAdministration": "directions_for_administration",
+            "allergyAndCrossSensitivity": "allergy_cross_sensitivity",
+            "importantSafetyInformation": "important_safety",
+            "unlicensedUse": "unlicensed_use",
+            "patientAndCarerAdvice": "patient_carer_advice",
+            "drugAction": "drug_action",
+            "conceptionAndContraception": "conception_contraception",
+            "preTreatmentScreening": "pre_treatment_screening",
         }
 
-        for heading_text, content in h2_map.items():
-            for pattern, key in heading_to_key.items():
-                if pattern in heading_text:
-                    result[key] = content
-                    break
+        for json_key, our_key in section_map.items():
+            text = _extract_bnf_section_text(drug.get(json_key))
+            if text:
+                result[our_key] = text
 
-        # Extract drug title
-        title = soup.find("h1")
-        if title:
-            result["title"] = title.get_text(strip=True)
+        # Constituent drugs (combination products refer to individual components)
+        constituents = drug.get("constituentDrugs")
+        if constituents:
+            result["constituent_drugs"] = {
+                "message": constituents.get("message", ""),
+                "drugs": [
+                    {"title": c.get("title", ""), "slug": c.get("slug", "")}
+                    for c in constituents.get("constituents", [])
+                ],
+            }
+
+        # Medicinal forms
+        med_forms = drug.get("medicinalForms", {})
+        if med_forms:
+            forms_parts = []
+            if med_forms.get("initialStatement"):
+                forms_parts.append(med_forms["initialStatement"])
+            for form in med_forms.get("medicinalForms", []):
+                form_title = form.get("form", "")
+                if form_title:
+                    forms_parts.append(form_title)
+            if forms_parts:
+                result["medicinal_forms"] = " | ".join(forms_parts)
+
+        # Interactions note (just a reference — detailed data comes from gather_bnf_interactions)
+        interactants = drug.get("interactants", [])
+        if interactants:
+            result["interactions"] = f"See BNF interactions page for {drug_name}"
 
     except Exception as e:
         result["status"] = "error"
@@ -466,118 +548,44 @@ async def gather_bnf_data(client: httpx.AsyncClient, drug_name: str) -> dict:
 
 
 # ===========================================================================
-# DATA GATHERING — BNF INTERACTIONS
+# DATA GATHERING — BNF INTERACTIONS (via Gatsby JSON API)
 # ===========================================================================
 async def gather_bnf_interactions(client: httpx.AsyncClient, drug_name: str) -> dict:
-    """Scrape BNF interactions page for detailed interaction data.
+    """Fetch BNF interactions via the Gatsby JSON API.
 
-    The BNF site is a Gatsby static site with CSS Modules (mangled class names).
-    We use attribute-substring selectors like [class*="..."] to match elements.
+    Returns structured interaction data with severity and evidence levels.
     """
     slug = drug_name.lower().replace(" ", "-")
-    url = f"https://bnf.nice.org.uk/interactions/{slug}/"
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        "Accept-Language": "en-GB,en;q=0.9",
-    }
+    json_url = f"https://bnf.nice.org.uk/page-data/interactions/{slug}/page-data.json"
+    html_url = f"https://bnf.nice.org.uk/interactions/{slug}/"
 
-    result = {"source": url, "interactions": []}
+    result = {"source": html_url, "interactions": []}
 
     try:
-        resp = await _resilient_get(client, url, headers)
+        resp = await _resilient_get(client, json_url)
         if resp is None:
-            result["error"] = "All fetch attempts failed (site may be blocking cloud IPs)"
+            result["error"] = "BNF interactions JSON API not reachable"
             return result
 
-        soup = BeautifulSoup(resp.text, "html.parser")
+        data = resp.json()
+        interactant = data.get("result", {}).get("data", {}).get("bnfInteractant", {})
+        if not interactant:
+            return result
 
-        # CSS Modules mangle class names. Use attribute substring selectors.
-        # Each interaction is an <li> inside <ol class*="interactionsList">
-        interaction_items = soup.select('li[class*="interactionsListItem"]')
-
-        # Fallback: try finding <h3> headings that link to drug monographs
-        if not interaction_items:
-            interaction_items = []
-            for h3 in soup.find_all("h3"):
-                cls = " ".join(h3.get("class", []))
-                if "interactant" in cls.lower() or "title" in cls.lower():
-                    interaction_items.append(h3.parent)
-                    continue
-                # Also try by link pattern
-                link = h3.find("a", href=lambda x: x and "/drugs/" in x)
-                if link and h3.find_parent("ol"):
-                    interaction_items.append(h3.parent)
-
-        # Second fallback: find the ordered list and get all <li> children
-        if not interaction_items:
-            ol = soup.find("ol")
-            if ol:
-                interaction_items = ol.find_all("li", recursive=False)
-
-        for item in interaction_items:
-            # Drug name from <h3> heading (may contain a link to /drugs/slug/)
-            h3 = item.find("h3")
-            if not h3:
-                continue
-            interacting_drug = h3.get_text(strip=True)
-            if not interacting_drug or len(interacting_drug) < 2:
+        for ix in interactant.get("interactions", []):
+            interacting_drug = ix.get("interactant", {}).get("title", "")
+            if not interacting_drug:
                 continue
 
-            # Each interaction can have multiple messages in <ul>/<li>
-            message_items = item.select('li[class*="message"]')
-            if not message_items:
-                # Fallback: find <ul> inside this item and get <li> children
-                ul = item.find("ul")
-                if ul:
-                    message_items = ul.find_all("li", recursive=False)
-
-            if not message_items:
-                # No structured messages; take the item text minus the heading
-                text = item.get_text(separator=" ", strip=True)
-                text = text.replace(interacting_drug, "", 1).strip()
-                if text:
-                    result["interactions"].append({
-                        "interacting_drug": interacting_drug,
-                        "severity": "unknown",
-                        "evidence": "",
-                        "detail": text[:500],
-                    })
-                continue
-
-            for msg_item in message_items:
-                # Extract message text (the description of the interaction)
-                # The message content uses non-mangled classes: substance-primary,
-                # effectQualifier, effect, parameter, action
-                detail = msg_item.get_text(separator=" ", strip=True)
-
-                # Extract severity from <dl> supplementary info
-                severity = "Normal"
-                evidence = ""
-                dl = msg_item.find("dl")
-                if dl:
-                    dts = dl.find_all("dt")
-                    dds = dl.find_all("dd")
-                    for dt, dd in zip(dts, dds):
-                        label = dt.get_text(strip=True).lower().rstrip(":")
-                        value = dd.get_text(strip=True)
-                        if "severity" in label:
-                            severity = value
-                        elif "evidence" in label:
-                            evidence = value
-                    # Remove the dl text from the detail
-                    dl_text = dl.get_text(separator=" ", strip=True)
-                    detail = detail.replace(dl_text, "").strip()
-
-                # Check for severe styling
-                severe_div = msg_item.select_one('div[class*="severeMessage"]')
-                if severe_div and severity == "Normal":
-                    severity = "Severe"
+            for msg in ix.get("messages", []):
+                # Extract plain text from HTML message
+                msg_html = msg.get("message", "")
+                detail = BeautifulSoup(msg_html, "html.parser").get_text(strip=True) if msg_html else ""
 
                 result["interactions"].append({
                     "interacting_drug": interacting_drug,
-                    "severity": severity,
-                    "evidence": evidence,
+                    "severity": msg.get("severity", "Unknown"),
+                    "evidence": msg.get("evidence", ""),
                     "detail": detail[:500],
                 })
 

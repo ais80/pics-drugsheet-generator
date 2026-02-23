@@ -19,13 +19,20 @@ Drugsheets/
 │   ├── TFQavSummary.xlsx              # Trade/form/quantity/availability summary
 │   ├── cleaned/                       # Output from /tidy-kb skill
 │   └── organized/                     # Categorised cleaned files
-├── bnf-mcp/                           # Python MCP servers and scripts
+├── bnf-mcp/                           # Python engine, web apps, and MCP servers
+│   ├── generate.py                    # Core engine — BNF/EMC data gathering, analysis, compilation
+│   ├── app.py                         # Streamlit web app (deployed to Streamlit Cloud)
+│   ├── api.py                         # FastAPI web app (SSE streaming, file downloads)
 │   ├── server.py                      # BNF-Pro MCP (analyze_drug, get_interaction_detail)
 │   ├── emc_server.py                  # EMC SmPC MCP (get_smpc_details)
 │   ├── dmd_server.py                  # dm+d Term Server MCP (map_drug_to_codes, get_controlled_drug_info)
 │   ├── formulary_server.py            # Birmingham Formulary MCP (get_local_formulary_status)
 │   ├── tidy_kb.py                     # Knowledge base cleaning script
+│   ├── static/                        # Frontend assets for FastAPI app
+│   ├── requirements.txt               # Streamlit Cloud dependencies
 │   └── pyproject.toml                 # Python deps (fastmcp, beautifulsoup4, pandas, etc.)
+├── cache/                             # Cached generated drug sheets (auto-created)
+├── output/                            # Generated output files (auto-created)
 ├── prompts/
 │   ├── claude_code_prompt.md          # Master prompt for Claude Code
 │   └── gemini_cli_prompt.md           # Equivalent prompt for Gemini CLI (Linux Mint)
@@ -48,6 +55,23 @@ All custom servers use FastMCP (Python) and run via `uv run`. Playwright uses np
 | `playwright` | (npm) | Browser automation | Web scraping fallback |
 
 Cloud MCP servers also available: **PubMed**, **ICD-10 Codes**, **Clinical Trials**.
+
+## BNF Data Architecture
+
+The core engine (`generate.py`) fetches BNF drug data via the **Gatsby JSON API** (`page-data.json` endpoints) rather than HTML scraping. This is more reliable from cloud environments where HTML pages may return 403.
+
+### Key endpoints
+- Drug data: `https://bnf.nice.org.uk/page-data/drugs/{slug}/page-data.json`
+- Interactions: `https://bnf.nice.org.uk/page-data/interactions/{slug}/page-data.json`
+
+### BNF JSON section patterns
+Most sections use a `{"content": "<p>HTML...</p>"}` pattern, but some differ:
+- `monitoringRequirements` uses `monitoringOfPatientParameters`, `patientMonitoringProgrammes`, `therapeuticDrugMonitoring`
+- `indicationsAndDose` uses `indicationAndDoseGroups` with `doseStatement` on each patient group
+- Combination drugs have a `constituentDrugs` field that lists the individual component drugs
+
+### Resilient fetching
+`_resilient_get()` tries direct fetch first, then falls back to CORS proxy services (allorigins, corsproxy.io, codetabs) if blocked.
 
 ## Template Field Mapping (Non-infusion Drugsheet v3.6)
 
@@ -169,15 +193,40 @@ For a given drug, the system runs these agents in order:
 # Activate the Python environment
 cd bnf-mcp && source .venv/Scripts/activate   # Windows (bash)
 
+# Run Streamlit app locally
+streamlit run app.py
+
+# Run FastAPI app locally
+uvicorn api:app --reload
+
 # Run an MCP server locally for testing
 uv run server.py
 
 # Clean knowledge base files
 python tidy_kb.py
 
+# Self-test BNF data extraction
+python -c "
+import asyncio, httpx
+from generate import gather_bnf_data, gather_bnf_interactions
+async def test():
+    async with httpx.AsyncClient() as client:
+        data = await gather_bnf_data(client, 'methotrexate')
+        print('Status:', data['status'])
+        print('Contraindications:', bool(data.get('contraindications')))
+        ix = await gather_bnf_interactions(client, 'methotrexate')
+        print('Interactions:', len(ix.get('interactions', [])))
+asyncio.run(test())
+"
+
 # List MCP servers
 claude mcp list
 ```
+
+### Streamlit Cloud deployment
+- App URL: `picsdrugsheetgenerator.streamlit.app`
+- Auto-deploys on push to `main` branch
+- Dependencies: `bnf-mcp/requirements.txt`
 
 ## Skills
 
