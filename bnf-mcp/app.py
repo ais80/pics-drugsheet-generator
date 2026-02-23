@@ -118,13 +118,11 @@ if generate_btn and drug_name.strip():
     # Run generation
     progress_bar = st.progress(0)
     status_text = st.empty()
-    steps_done = 0
-    total_steps = 10
+    progress_state = {"done": 0, "total": 10}
 
     def update_progress(msg: str):
-        nonlocal steps_done
-        steps_done += 1
-        progress_bar.progress(min(steps_done / total_steps, 1.0))
+        progress_state["done"] += 1
+        progress_bar.progress(min(progress_state["done"] / progress_state["total"], 1.0))
         status_text.text(msg)
 
     with st.spinner(f"Generating drug sheet for **{drug_name}**..."):
