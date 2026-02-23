@@ -247,6 +247,99 @@ class KnowledgeBase:
 
 
 # ===========================================================================
+# DRUG NAME SEARCH — find matching drugs in Knowledge base + BNF
+# ===========================================================================
+def search_drug_names(query: str, max_results: int = 20) -> list[dict]:
+    """Search for drug names matching a query string.
+
+    Returns a list of dicts with 'name', 'source', and optionally 'trade_name'.
+    Searches the Knowledge base drug list (9000+ drugs) for fuzzy matches.
+    """
+    if not query or len(query) < 2:
+        return []
+
+    kb = KnowledgeBase()
+    kb.load()
+
+    results = []
+    seen = set()
+    q = query.lower().strip()
+
+    if kb.drugs_to_classes is not None and not kb.drugs_to_classes.empty:
+        df = kb.drugs_to_classes
+
+        # Exact prefix matches first (most useful)
+        for _, row in df.iterrows():
+            drug = str(row.get("drugDesc", "")).strip()
+            generic = str(row.get("GENERIC", "")).strip()
+            trade = str(row.get("TRADE", "")).strip()
+
+            if not drug or drug.lower() == "nan":
+                continue
+
+            drug_lower = drug.lower()
+            generic_lower = generic.lower() if generic.lower() != "nan" else ""
+            trade_lower = trade.lower() if trade.lower() != "nan" else ""
+
+            # Check if query matches start of drug name, generic, or trade
+            is_prefix = (
+                drug_lower.startswith(q)
+                or generic_lower.startswith(q)
+                or trade_lower.startswith(q)
+            )
+            # Also check if query appears anywhere
+            is_contains = (
+                q in drug_lower or q in generic_lower or q in trade_lower
+            )
+
+            if (is_prefix or is_contains) and drug_lower not in seen:
+                seen.add(drug_lower)
+                results.append({
+                    "name": drug,
+                    "generic": generic if generic_lower != "nan" else "",
+                    "trade": trade if trade_lower != "nan" else "",
+                    "source": "Knowledge base",
+                    "is_prefix": is_prefix,
+                })
+
+    # Sort: prefix matches first, then alphabetically
+    results.sort(key=lambda x: (not x["is_prefix"], x["name"].lower()))
+
+    return results[:max_results]
+
+
+async def validate_bnf_drug(drug_name: str) -> dict:
+    """Check if a drug exists on BNF by trying its page-data endpoint.
+
+    Returns dict with 'found', 'title', 'slug', 'classification'.
+    """
+    slug = drug_name.lower().replace(" ", "-")
+    url = f"https://bnf.nice.org.uk/page-data/drugs/{slug}/page-data.json"
+
+    try:
+        async with httpx.AsyncClient() as client:
+            resp = await client.get(
+                url,
+                headers=_DEFAULT_HEADERS,
+                follow_redirects=True,
+                timeout=10.0,
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                drug_data = data.get("result", {}).get("data", {}).get("bnfDrug", {})
+                return {
+                    "found": True,
+                    "title": drug_data.get("title", drug_name),
+                    "slug": drug_data.get("slug", slug),
+                    "classification": drug_data.get("primaryClassification", {}).get("title", ""),
+                }
+    except Exception:
+        pass
+
+    return {"found": False, "title": drug_name, "slug": slug}
+
+
+# ===========================================================================
 # RESILIENT FETCH — retry via proxies when blocked (403)
 # ===========================================================================
 _DEFAULT_HEADERS = {

@@ -14,6 +14,8 @@ from generate import (
     generate_review_markdown,
     generate_epma_json,
     save_outputs,
+    search_drug_names,
+    validate_bnf_drug,
 )
 
 # ---------------------------------------------------------------------------
@@ -85,11 +87,37 @@ with st.sidebar:
     if mode == "Generate New":
         st.header("Drug Details")
 
-        drug_name = st.text_input(
+        drug_query = st.text_input(
             "Drug Name",
             placeholder="e.g. Amoxicillin, Methotrexate, Morphine",
-            help="Enter the generic (non-proprietary) drug name",
+            help="Start typing to search — matching drugs will appear below",
         )
+
+        # Show search suggestions as user types
+        drug_name = drug_query  # default: use what they typed
+        if drug_query and len(drug_query.strip()) >= 2:
+            matches = search_drug_names(drug_query.strip(), max_results=10)
+            if matches:
+                # Build display options
+                options = []
+                for m in matches:
+                    label = m["name"]
+                    if m.get("trade") and m["trade"] != m["name"]:
+                        label += f"  (trade: {m['trade']})"
+                    options.append(label)
+
+                selected = st.selectbox(
+                    "Matching drugs",
+                    options=["(use typed name)"] + options,
+                    index=0,
+                    help="Select a match or keep your typed name",
+                )
+
+                if selected != "(use typed name)":
+                    # Extract just the drug name (before any trade name annotation)
+                    drug_name = selected.split("  (trade:")[0].strip()
+            else:
+                st.caption("No matches found in Knowledge base — will try BNF directly")
 
         drug_form = st.text_input(
             "Form (optional)",
