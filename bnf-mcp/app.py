@@ -15,6 +15,7 @@ from generate import (
     generate_epma_json,
     save_outputs,
     search_drug_names,
+    search_emc_products,
     validate_bnf_drug,
 )
 
@@ -147,6 +148,34 @@ with st.sidebar:
 
         st.divider()
 
+        # EMC SmPC product selection
+        st.header("EMC SmPC Sources")
+        selected_emc = None
+        if drug_name.strip() and len(drug_name.strip()) >= 3:
+            if "emc_products" not in st.session_state or st.session_state.get("emc_search_drug") != drug_name.strip():
+                with st.spinner("Searching EMC..."):
+                    st.session_state.emc_products = asyncio.run(search_emc_products(drug_name.strip()))
+                    st.session_state.emc_search_drug = drug_name.strip()
+
+            emc_products = st.session_state.emc_products
+            if emc_products:
+                st.caption(f"{len(emc_products)} SmPC(s) found on EMC")
+                emc_options = [p["name"] for p in emc_products]
+                selected_indices = []
+                for i, name in enumerate(emc_options):
+                    if st.checkbox(name, value=(i == 0), key=f"emc_{i}"):
+                        selected_indices.append(i)
+
+                if selected_indices:
+                    selected_emc = [emc_products[i] for i in selected_indices]
+                    st.caption(f"{len(selected_emc)} selected")
+                else:
+                    st.warning("Select at least one SmPC")
+            else:
+                st.caption("No SmPC results found on EMC")
+
+        st.divider()
+
         # Check if cached version exists
         use_cache = False
         if drug_name.strip():
@@ -234,18 +263,41 @@ def display_drugsheet(drugsheet: dict, drug_label: str):
             st.warning(f"BNF data: {drugsheet.get('bnf_data', {}).get('status', 'unknown')}")
 
         st.subheader("EMC SmPC Data")
-        if drugsheet.get("emc_data", {}).get("status") == "ok":
-            with st.expander("EMC SmPC Sections", expanded=False):
-                for key in [
-                    "4.2_posology", "4.3_contraindications", "4.4_special_warnings",
-                    "4.5_interactions", "4.6_fertility_pregnancy", "4.8_undesirable_effects",
-                ]:
-                    val = drugsheet["emc_data"].get(key)
-                    if val:
-                        st.markdown(f"**Section {key}**")
-                        st.text(val[:1000])
+        emc = drugsheet.get("emc_data", {})
+        if emc.get("status") == "ok":
+            smpc_count = emc.get("smpc_count", 1)
+            if smpc_count > 1:
+                st.info(f"Data merged from {smpc_count} SmPCs")
+                if emc.get("all_sources"):
+                    for src in emc["all_sources"]:
+                        st.caption(f"- {src['product_name']}: {src['url']}")
+
+            # Show individual SmPC details if available
+            all_smpcs = emc.get("all_smpcs", [])
+            if all_smpcs and len(all_smpcs) > 1:
+                for smpc in all_smpcs:
+                    if smpc.get("status") == "ok":
+                        with st.expander(f"SmPC: {smpc['product_name']}", expanded=False):
+                            for key in [
+                                "4.2_posology", "4.3_contraindications", "4.4_special_warnings",
+                                "4.5_interactions", "4.6_fertility_pregnancy", "4.8_undesirable_effects",
+                            ]:
+                                val = smpc.get(key)
+                                if val:
+                                    st.markdown(f"**Section {key}**")
+                                    st.text(val[:1000])
+            else:
+                with st.expander("EMC SmPC Sections", expanded=False):
+                    for key in [
+                        "4.2_posology", "4.3_contraindications", "4.4_special_warnings",
+                        "4.5_interactions", "4.6_fertility_pregnancy", "4.8_undesirable_effects",
+                    ]:
+                        val = emc.get(key)
+                        if val:
+                            st.markdown(f"**Section {key}**")
+                            st.text(val[:1000])
         else:
-            st.warning(f"EMC data: {drugsheet.get('emc_data', {}).get('status', 'unknown')}")
+            st.warning(f"EMC data: {emc.get('status', 'unknown')}")
 
         st.subheader("Formulary")
         st.json(drugsheet.get("formulary_data", {}))
@@ -332,6 +384,7 @@ if generate_btn and drug_name.strip():
                     drug_form=drug_form.strip() if drug_form.strip() else None,
                     uploaded_pdfs=pdf_data if pdf_data else None,
                     progress_callback=update_progress,
+                    selected_emc_products=selected_emc,
                 )
             )
 

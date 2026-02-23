@@ -590,54 +590,64 @@ async def gather_bnf_interactions(client: httpx.AsyncClient, drug_name: str) -> 
 # ===========================================================================
 # DATA GATHERING — EMC SmPC
 # ===========================================================================
-async def gather_emc_data(client: httpx.AsyncClient, drug_name: str) -> dict:
-    """Scrape EMC for SmPC data."""
-    search_url = f"https://www.medicines.org.uk/emc/search?q={drug_name}"
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-    }
+async def search_emc_products(drug_name: str) -> list[dict]:
+    """Search EMC and return all matching SmPC products.
 
-    result = {"drug": drug_name, "status": "pending"}
+    Returns list of dicts with 'name', 'url', 'href' for each SmPC found.
+    """
+    import urllib.parse
+    search_url = f"https://www.medicines.org.uk/emc/search?q={urllib.parse.quote(drug_name)}"
+
+    products = []
+    try:
+        async with httpx.AsyncClient() as client:
+            resp = await _resilient_get(client, search_url)
+            if resp is None:
+                return products
+            soup = BeautifulSoup(resp.text, "html.parser")
+
+            # Find all SmPC product links
+            smpc_links = soup.find_all("a", href=lambda x: x and "/emc/product/" in x and "/smpc" in x)
+            if not smpc_links:
+                smpc_links = soup.find_all("a", href=lambda x: x and "/emc/product/" in x)
+
+            seen_hrefs = set()
+            for link in smpc_links:
+                href = link["href"]
+                if href in seen_hrefs:
+                    continue
+                seen_hrefs.add(href)
+                full_url = "https://www.medicines.org.uk" + href
+                if "/smpc" not in full_url:
+                    full_url += "/smpc"
+                products.append({
+                    "name": link.get_text(strip=True),
+                    "url": full_url,
+                    "href": href,
+                })
+    except Exception:
+        pass
+
+    return products
+
+
+async def _fetch_single_smpc(client: httpx.AsyncClient, product_url: str, product_name: str) -> dict:
+    """Fetch a single EMC SmPC page and extract sections. Returns section data dict."""
+    result = {"product_name": product_name, "source": product_url, "status": "pending"}
 
     try:
-        # 1. Search
-        search_resp = await _resilient_get(client, search_url, headers)
-        if search_resp is None:
-            result["status"] = "not_found"
-            result["error"] = "All fetch attempts failed (site may be blocking cloud IPs)"
-            return result
-        soup = BeautifulSoup(search_resp.text, "html.parser")
-
-        # Find first SmPC product link (class name varies, use href pattern)
-        smpc_links = soup.find_all("a", href=lambda x: x and "/emc/product/" in x and "/smpc" in x)
-        if not smpc_links:
-            # Fallback: any product link
-            smpc_links = soup.find_all("a", href=lambda x: x and "/emc/product/" in x)
-        if not smpc_links:
-            result["status"] = "not_found"
+        resp = await _resilient_get(client, product_url)
+        if resp is None:
+            result["status"] = "error"
+            result["error"] = "Fetch failed"
             return result
 
-        href = smpc_links[0]["href"]
-        product_url = "https://www.medicines.org.uk" + href
-        if "/smpc" not in product_url:
-            product_url += "/smpc"
-        result["source"] = product_url
-        result["product_name"] = smpc_links[0].get_text(strip=True)
-
-        # 2. Fetch SmPC
-        smpc_resp = await _resilient_get(client, product_url, headers)
-        if smpc_resp is None:
-            result["status"] = "partial"
-            result["error"] = "SmPC page fetch failed"
-            return result
-        smpc_soup = BeautifulSoup(smpc_resp.text, "html.parser")
-
+        soup = BeautifulSoup(resp.text, "html.parser")
         result["status"] = "ok"
 
         for key, section_num in EMC_SECTIONS.items():
-            header = smpc_soup.find(
-                lambda tag: tag.name in ["h2", "h3"] and section_num in tag.text
+            header = soup.find(
+                lambda tag, sn=section_num: tag.name in ["h2", "h3"] and sn in tag.text
             )
             if header:
                 content = []
@@ -648,6 +658,94 @@ async def gather_emc_data(client: httpx.AsyncClient, drug_name: str) -> dict:
                 result[key] = " ".join(content)
             else:
                 result[key] = None
+
+    except Exception as e:
+        result["status"] = "error"
+        result["error"] = str(e)
+
+    return result
+
+
+async def gather_emc_data(
+    client: httpx.AsyncClient,
+    drug_name: str,
+    selected_products: list[dict] | None = None,
+) -> dict:
+    """Scrape EMC for SmPC data. If selected_products is provided, fetches all of them
+    and merges sections with source references. Otherwise searches and uses first result.
+
+    selected_products: list of dicts with 'name' and 'url' keys (from search_emc_products).
+    """
+    result = {"drug": drug_name, "status": "pending"}
+
+    try:
+        if not selected_products:
+            # Legacy behaviour: search and use first result
+            import urllib.parse
+            search_url = f"https://www.medicines.org.uk/emc/search?q={urllib.parse.quote(drug_name)}"
+            search_resp = await _resilient_get(client, search_url)
+            if search_resp is None:
+                result["status"] = "not_found"
+                result["error"] = "All fetch attempts failed (site may be blocking cloud IPs)"
+                return result
+            soup = BeautifulSoup(search_resp.text, "html.parser")
+
+            smpc_links = soup.find_all("a", href=lambda x: x and "/emc/product/" in x and "/smpc" in x)
+            if not smpc_links:
+                smpc_links = soup.find_all("a", href=lambda x: x and "/emc/product/" in x)
+            if not smpc_links:
+                result["status"] = "not_found"
+                return result
+
+            href = smpc_links[0]["href"]
+            product_url = "https://www.medicines.org.uk" + href
+            if "/smpc" not in product_url:
+                product_url += "/smpc"
+            selected_products = [{"name": smpc_links[0].get_text(strip=True), "url": product_url}]
+
+        # Fetch all selected SmPCs in parallel
+        tasks = [
+            _fetch_single_smpc(client, p["url"], p["name"])
+            for p in selected_products
+        ]
+        smpc_results = await asyncio.gather(*tasks)
+
+        # Store individual SmPC results for reference
+        successful = [s for s in smpc_results if s.get("status") == "ok"]
+        result["all_smpcs"] = smpc_results
+        result["smpc_count"] = len(successful)
+
+        if not successful:
+            result["status"] = "not_found"
+            result["error"] = "No SmPC pages could be fetched"
+            return result
+
+        # Use the first successful SmPC as the primary source
+        primary = successful[0]
+        result["source"] = primary["source"]
+        result["product_name"] = primary["product_name"]
+        result["status"] = "ok"
+
+        # Merge sections across all SmPCs with source references
+        for key in EMC_SECTIONS:
+            merged_parts = []
+            for smpc in successful:
+                text = smpc.get(key)
+                if text:
+                    if len(successful) > 1:
+                        # Tag each section with its source SmPC
+                        merged_parts.append(f"[{smpc['product_name']}] {text}")
+                    else:
+                        merged_parts.append(text)
+
+            result[key] = " ||| ".join(merged_parts) if merged_parts else None
+
+        # Build a combined source list
+        if len(successful) > 1:
+            result["all_sources"] = [
+                {"product_name": s["product_name"], "url": s["source"]}
+                for s in successful
+            ]
 
     except Exception as e:
         result["status"] = "error"
@@ -1548,6 +1646,7 @@ async def generate_drugsheet(
     drug_form: str | None = None,
     uploaded_pdfs: list[dict] | None = None,
     progress_callback=None,
+    selected_emc_products: list[dict] | None = None,
 ) -> dict:
     """
     Main orchestrator: gathers all data, runs analysis, compiles drugsheet.
@@ -1588,7 +1687,7 @@ async def generate_drugsheet(
     _progress("Gathering data from BNF, EMC, and Formulary...")
     async with httpx.AsyncClient() as client:
         bnf_task = gather_bnf_data(client, drug_name)
-        emc_task = gather_emc_data(client, drug_name)
+        emc_task = gather_emc_data(client, drug_name, selected_emc_products)
         formulary_task = gather_formulary_data(client, drug_name, drug_form)
         interactions_task = gather_bnf_interactions(client, drug_name)
 
@@ -1603,7 +1702,15 @@ async def generate_drugsheet(
     # Add references
     if bnf_data.get("source"):
         drugsheet["references"].append({"source": "BNF", "url": bnf_data["source"], "accessed": today})
-    if emc_data.get("source"):
+    # Add all EMC SmPC sources
+    if emc_data.get("all_sources"):
+        for src in emc_data["all_sources"]:
+            drugsheet["references"].append({
+                "source": f"EMC SmPC — {src['product_name']}",
+                "url": src["url"],
+                "accessed": today,
+            })
+    elif emc_data.get("source"):
         drugsheet["references"].append({"source": "EMC SmPC", "url": emc_data["source"], "accessed": today})
     if formulary_data.get("source"):
         drugsheet["references"].append({"source": "Birmingham Formulary", "url": formulary_data["source"], "accessed": today})
@@ -1688,6 +1795,14 @@ def generate_review_markdown(ds: dict) -> str:
         f"**Generated:** {today}",
         "",
     ]
+
+    # EMC SmPC sources
+    emc = ds.get("emc_data", {})
+    if emc.get("all_sources") and len(emc["all_sources"]) > 1:
+        lines.append(f"**EMC SmPCs consulted:** {emc.get('smpc_count', 1)}")
+        for src in emc["all_sources"]:
+            lines.append(f"- [{src['product_name']}]({src['url']})")
+        lines.append("")
 
     # Supplementary docs
     if ds.get("supplementary_documents"):
