@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+*.egg-info/
+
+# MCP servers (not needed for web app)
+bnf-mcp/server.py
+bnf-mcp/emc_server.py
+bnf-mcp/dmd_server.py
+bnf-mcp/formulary_server.py
+bnf-mcp/tidy_kb.py
+
+# Streamlit app (replaced by web app)
+bnf-mcp/app.py
+
+# Dev files
+prompts/
+Templates/
+.claude/
+output/
+run.bat
+run.sh
+CLAUDE.md
+DEPLOY.md
+*.docx
+
+# Git
+.git/
+.gitignore

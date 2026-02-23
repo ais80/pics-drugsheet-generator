@@ -20,7 +20,11 @@ from bs4 import BeautifulSoup
 # Paths
 # ---------------------------------------------------------------------------
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-KB_DIR = PROJECT_ROOT / "Knowledge base"
+KB_DIR = (
+    PROJECT_ROOT / "Knowledge_base"
+    if (PROJECT_ROOT / "Knowledge_base").exists()
+    else PROJECT_ROOT / "Knowledge base"
+)
 OUTPUT_DIR = PROJECT_ROOT / "output"
 OUTPUT_DIR.mkdir(exist_ok=True)
 

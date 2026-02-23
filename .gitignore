@@ -33,5 +33,5 @@ uv.lock
 *.doc
 *.docx
 
-# Knowledge base (large Excel files - not tracked in git)
-Knowledge base/
+# Knowledge base organized/ subfolder (derived, not needed)
+Knowledge base/organized/
