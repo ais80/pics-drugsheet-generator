@@ -14,7 +14,7 @@ from fastapi.responses import PlainTextResponse, Response
 from fastapi.staticfiles import StaticFiles
 from starlette.responses import FileResponse, StreamingResponse
 
-from generate import generate_drugsheet, generate_epma_json, generate_review_markdown
+from generate import generate_drugsheet, generate_epma_json, generate_review_markdown, search_drug_names
 
 app = FastAPI(title="PICS Drug Sheet Generator")
 
@@ -49,6 +49,15 @@ def _sse_event(event: str, data: dict) -> str:
 @app.get("/healthz")
 async def healthz():
     return {"status": "ok"}
+
+
+@app.get("/api/search")
+async def api_search(q: str = ""):
+    """Search BNF drug list for matching drug names."""
+    if len(q.strip()) < 2:
+        return {"results": []}
+    matches = search_drug_names(q.strip(), max_results=10)
+    return {"results": [{"name": m["name"], "slug": m.get("slug", "")} for m in matches]}
 
 
 @app.post("/api/generate")

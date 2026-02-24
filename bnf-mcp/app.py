@@ -94,31 +94,24 @@ with st.sidebar:
             help="Start typing to search — matching drugs will appear below",
         )
 
-        # Show search suggestions as user types
+        # Show search suggestions from BNF as user types
         drug_name = drug_query  # default: use what they typed
         if drug_query and len(drug_query.strip()) >= 2:
             matches = search_drug_names(drug_query.strip(), max_results=10)
             if matches:
-                # Build display options
-                options = []
-                for m in matches:
-                    label = m["name"]
-                    if m.get("trade") and m["trade"] != m["name"]:
-                        label += f"  (trade: {m['trade']})"
-                    options.append(label)
+                options = [m["name"] for m in matches]
 
                 selected = st.selectbox(
-                    "Matching drugs",
+                    "BNF matches",
                     options=["(use typed name)"] + options,
                     index=0,
-                    help="Select a match or keep your typed name",
+                    help="Select a BNF drug or keep your typed name",
                 )
 
                 if selected != "(use typed name)":
-                    # Extract just the drug name (before any trade name annotation)
-                    drug_name = selected.split("  (trade:")[0].strip()
+                    drug_name = selected
             else:
-                st.caption("No matches found in Knowledge base — will try BNF directly")
+                st.caption("No matches found on BNF — will use typed name")
 
         drug_form = st.text_input(
             "Form (optional)",

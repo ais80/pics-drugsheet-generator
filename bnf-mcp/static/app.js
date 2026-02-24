@@ -21,6 +21,53 @@ const jsonOutput = document.getElementById('json-output');
 const rawOutput = document.getElementById('raw-output');
 
 // ---------------------------------------------------------------------------
+// BNF drug name autocomplete
+// ---------------------------------------------------------------------------
+const drugNameInput = document.getElementById('drug-name');
+const suggestionsEl = document.getElementById('drug-suggestions');
+let searchTimeout = null;
+
+drugNameInput.addEventListener('input', () => {
+    clearTimeout(searchTimeout);
+    const q = drugNameInput.value.trim();
+    if (q.length < 2) {
+        suggestionsEl.classList.add('hidden');
+        return;
+    }
+    searchTimeout = setTimeout(async () => {
+        try {
+            const resp = await fetch(`/api/search?q=${encodeURIComponent(q)}`);
+            const data = await resp.json();
+            if (data.results && data.results.length > 0) {
+                suggestionsEl.innerHTML = '';
+                data.results.forEach(item => {
+                    const li = document.createElement('li');
+                    li.textContent = item.name;
+                    li.className = 'px-3 py-1.5 text-sm cursor-pointer hover:bg-blue-50 hover:text-blue-700';
+                    li.addEventListener('click', () => {
+                        drugNameInput.value = item.name;
+                        suggestionsEl.classList.add('hidden');
+                    });
+                    suggestionsEl.appendChild(li);
+                });
+                suggestionsEl.classList.remove('hidden');
+            } else {
+                suggestionsEl.classList.add('hidden');
+            }
+        } catch {
+            suggestionsEl.classList.add('hidden');
+        }
+    }, 250);
+});
+
+// Hide suggestions when clicking outside
+document.addEventListener('click', (e) => {
+    if (!drugNameInput.contains(e.target) && !suggestionsEl.contains(e.target)) {
+        suggestionsEl.classList.add('hidden');
+    }
+});
+
+// ---------------------------------------------------------------------------
 // Tab switching
 // ---------------------------------------------------------------------------
 document.querySelectorAll('.tab-btn').forEach(btn => {

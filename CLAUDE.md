@@ -61,6 +61,7 @@ Cloud MCP servers also available: **PubMed**, **ICD-10 Codes**, **Clinical Trial
 The core engine (`generate.py`) fetches BNF drug data via the **Gatsby JSON API** (`page-data.json` endpoints) rather than HTML scraping. This is more reliable from cloud environments where HTML pages may return 403.
 
 ### Key endpoints
+- Drug list: `https://bnf.nice.org.uk/page-data/drugs/page-data.json` → `allDrugs.letters[].links[]` (~1,771 drugs)
 - Drug data: `https://bnf.nice.org.uk/page-data/drugs/{slug}/page-data.json`
 - Interactions: `https://bnf.nice.org.uk/page-data/interactions/{slug}/page-data.json`
 
@@ -100,8 +101,8 @@ Each table in the template is mapped to a data source and automation status.
 ### Clinical Safety (Automated)
 | Table | Section | Source | Automated? |
 |---|---|---|---|
-| 11 | Contraindications + ICD-10 codes + warning levels | BNF + EMC + ICD-10 MCP/xlsx | Yes |
-| 12 | Interactions + drug class codes + warning levels | BNF + EMC + drugsToClasses.xls | Yes |
+| 11 | Contraindications + ICD-10 codes + warning levels | BNF + EMC + ICD-10 tiered lookup (see below) | Yes |
+| 12 | Interactions + drug class codes + warning levels | BNF + EMC (section 4.5) + drugsToClasses.xls | Yes |
 | 13 | Unconditional messages (P/N, form, level) | BNF + EMC + AI | Yes |
 | 15 | Other info + Result warnings (eGFR, ALT syntax) | BNF + EMC + AI | Yes |
 
@@ -160,7 +161,7 @@ For a given drug, the system runs these agents in order:
 ### Phase 2: Mapping & Analysis (sequential, depends on Phase 1)
 4. **Brand/Redirect Agent** — identify if brand prescribing required, set up redirects
 5. **Drug Class Agent** — map drug to classes in drugsToClasses.xls, identify PICS codes. Flag incomplete mappings for human review
-6. **Contraindication/Caution Agent** — map to ICD-10 codes (cloud MCP + ICD10_usage.xlsx), prefix descriptions, assign warning levels
+6. **Contraindication/Caution Agent** — map to ICD-10 codes (tiered lookup, see ICD-10 Mapping section), prefix descriptions, assign warning levels
 7. **Interaction Agent** — cross-reference against drug classes, identify coverage gaps, suggest new classes for trends, assign warning levels (0–3)
 8. **Message Agent** — identify unconditional prescriber/nurse messages, form-specific messages
 9. **Result Warning Agent** — extract renal/hepatic/age thresholds, format as PICS result warning syntax
@@ -176,6 +177,34 @@ For a given drug, the system runs these agents in order:
     - **Programmer/EPMA format**: structured data for keying into PICS
 14. **Reference Agent** — compile all source URLs with access dates
 
+## ICD-10 Mapping Architecture
+
+Contraindications and cautions are mapped to ICD-10 codes using a 5-tier approach. Tiers 0-3 run automatically in `generate.py`; tier 4 runs when Claude orchestrates via `/generate-drugsheet`.
+
+| Tier | Source | Confidence | Details |
+|---|---|---|---|
+| 0 | `_COMMON_ICD10_MAP` (curated) | High | 200+ entries: ~55 broad clinical terms hardcoded + 150+ loaded from `Reverse drugsheets/contraindication_icd10_lookup.json` |
+| 1 | `ICD10_usage.xlsx` (PICS KB) | High | Existing PICS mappings from knowledge base |
+| 2 | NLM ICD-10-CM API | Medium | Free API, no auth: `clinicaltables.nlm.nih.gov`. Can return wrong codes for broad terms |
+| 3 | `[NEEDS ICD-10 MAPPING]` | None | Fallback — returns original text + cleaned text for Claude to pick up |
+| 4 | **Claude reasoning** (skill only) | High | When `/generate-drugsheet` runs, Claude interprets unmapped conditions, refines search terms, validates codes, and saves new mappings |
+
+### Self-expanding map
+- `save_icd10_mapping(condition, icd10_code, description)` in `generate.py` writes new entries to the JSON lookup file
+- The JSON file is loaded at startup and merged with the hardcoded map (hardcoded entries take priority)
+- Each drugsheet generated adds new mappings, reducing `[NEEDS ICD-10 MAPPING]` over time
+- To expand further: process more reverse drugsheet PDFs from the `Reverse drugsheets/` folder
+
+## EMC SmPC Parsing
+
+EMC uses `<details>/<summary>` accordion HTML structure (not `<h2>/<h3>`). The parser in `_fetch_single_smpc()` searches for `<details>` tags whose `<summary>` contains the section number (e.g. "4.3"). Falls back to legacy h2/h3 for older pages.
+
+Key sections extracted: 4.2 (posology), 4.3 (contraindications), 4.4 (special warnings/cautions), 4.5 (interactions), 4.6 (pregnancy), 4.8 (side effects).
+
+## Interactions
+
+BNF interactions are fetched from the interactions endpoint. EMC section 4.5 is parsed for additional interaction drugs using `_extract_emc_interaction_drugs()`. EMC-only interactions are merged with BNF results, deduplicated by drug name, each tagged with a `source` field ("BNF" or "EMC SmPC 4.5").
+
 ## Key Rules
 
 - **NEVER modify original Knowledge base files** — always output to `cleaned/` or `organized/`
@@ -190,34 +219,22 @@ For a given drug, the system runs these agents in order:
 ## Development
 
 ```bash
-# Activate the Python environment
-cd bnf-mcp && source .venv/Scripts/activate   # Windows (bash)
+# Run FastAPI app locally (primary local method)
+cd bnf-mcp && uvicorn api:app --host 127.0.0.1 --port 8000
+
+# Or use the desktop shortcuts:
+#   ~/Desktop/Drug Sheet Generator.desktop   — starts FastAPI on port 8000, opens browser
+#   ~/Desktop/Stop Drug Sheet Generator.desktop — kills server
+# Scripts: bnf-mcp/start.sh, bnf-mcp/stop.sh
 
 # Run Streamlit app locally
 streamlit run app.py
-
-# Run FastAPI app locally
-uvicorn api:app --reload
 
 # Run an MCP server locally for testing
 uv run server.py
 
 # Clean knowledge base files
 python tidy_kb.py
-
-# Self-test BNF data extraction
-python -c "
-import asyncio, httpx
-from generate import gather_bnf_data, gather_bnf_interactions
-async def test():
-    async with httpx.AsyncClient() as client:
-        data = await gather_bnf_data(client, 'methotrexate')
-        print('Status:', data['status'])
-        print('Contraindications:', bool(data.get('contraindications')))
-        ix = await gather_bnf_interactions(client, 'methotrexate')
-        print('Interactions:', len(ix.get('interactions', [])))
-asyncio.run(test())
-"
 
 # List MCP servers
 claude mcp list

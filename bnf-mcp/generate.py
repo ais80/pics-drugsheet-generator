@@ -6,11 +6,14 @@ Performs rule-based analysis and compiles into drugsheet output formats.
 
 import asyncio
 import json
+import logging
 import os
 import re
 import warnings
 from datetime import date
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 import httpx
 import pandas as pd
@@ -250,60 +253,75 @@ class KnowledgeBase:
 
 
 # ===========================================================================
-# DRUG NAME SEARCH — find matching drugs in Knowledge base + BNF
+# DRUG NAME SEARCH — search BNF drug list (with local cache)
 # ===========================================================================
+_bnf_drug_cache: list[dict] | None = None
+
+
+def _load_bnf_drug_list() -> list[dict]:
+    """Fetch the full BNF drug list from the Gatsby page-data endpoint.
+
+    Returns a list of dicts with 'title' and 'slug' for each drug (~1,770 drugs).
+    The result is cached in-memory so subsequent calls are instant.
+    """
+    global _bnf_drug_cache
+    if _bnf_drug_cache is not None:
+        return _bnf_drug_cache
+
+    import httpx as _httpx
+
+    url = "https://bnf.nice.org.uk/page-data/drugs/page-data.json"
+    drugs: list[dict] = []
+    try:
+        resp = _httpx.get(url, headers=_DEFAULT_HEADERS, follow_redirects=True, timeout=15.0)
+        if resp.status_code == 200:
+            data = resp.json()
+            letters = data.get("result", {}).get("data", {}).get("allDrugs", {}).get("letters", [])
+            for letter in letters:
+                for link in letter.get("links", []):
+                    drugs.append({"title": link["title"], "slug": link["slug"]})
+    except Exception:
+        pass
+
+    _bnf_drug_cache = drugs
+    return drugs
+
+
 def search_drug_names(query: str, max_results: int = 20) -> list[dict]:
     """Search for drug names matching a query string.
 
-    Returns a list of dicts with 'name', 'source', and optionally 'trade_name'.
-    Searches the Knowledge base drug list (9000+ drugs) for fuzzy matches.
+    Searches the BNF drug list (~1,770 drugs) as the primary source.
+    Returns a list of dicts with 'name', 'slug', 'source', and 'is_prefix'.
     """
     if not query or len(query) < 2:
         return []
 
-    kb = KnowledgeBase()
-    kb.load()
+    q = query.lower().strip()
+    bnf_drugs = _load_bnf_drug_list()
 
     results = []
     seen = set()
-    q = query.lower().strip()
 
-    if kb.drugs_to_classes is not None and not kb.drugs_to_classes.empty:
-        df = kb.drugs_to_classes
+    for drug in bnf_drugs:
+        title = drug["title"]
+        title_lower = title.lower()
 
-        # Exact prefix matches first (most useful)
-        for _, row in df.iterrows():
-            drug = str(row.get("drugDesc", "")).strip()
-            generic = str(row.get("GENERIC", "")).strip()
-            trade = str(row.get("TRADE", "")).strip()
+        if title_lower in seen:
+            continue
 
-            if not drug or drug.lower() == "nan":
-                continue
+        is_prefix = title_lower.startswith(q)
+        is_contains = q in title_lower
 
-            drug_lower = drug.lower()
-            generic_lower = generic.lower() if generic.lower() != "nan" else ""
-            trade_lower = trade.lower() if trade.lower() != "nan" else ""
-
-            # Check if query matches start of drug name, generic, or trade
-            is_prefix = (
-                drug_lower.startswith(q)
-                or generic_lower.startswith(q)
-                or trade_lower.startswith(q)
-            )
-            # Also check if query appears anywhere
-            is_contains = (
-                q in drug_lower or q in generic_lower or q in trade_lower
-            )
-
-            if (is_prefix or is_contains) and drug_lower not in seen:
-                seen.add(drug_lower)
-                results.append({
-                    "name": drug,
-                    "generic": generic if generic_lower != "nan" else "",
-                    "trade": trade if trade_lower != "nan" else "",
-                    "source": "Knowledge base",
-                    "is_prefix": is_prefix,
-                })
+        if is_prefix or is_contains:
+            seen.add(title_lower)
+            results.append({
+                "name": title,
+                "slug": drug["slug"],
+                "generic": "",
+                "trade": "",
+                "source": "BNF",
+                "is_prefix": is_prefix,
+            })
 
     # Sort: prefix matches first, then alphabetically
     results.sort(key=lambda x: (not x["is_prefix"], x["name"].lower()))
@@ -371,8 +389,9 @@ async def _resilient_get(
         resp = await client.get(url, headers=hdrs, follow_redirects=True, timeout=20.0)
         if resp.status_code == 200:
             return resp
-    except Exception:
-        pass
+        logger.warning("Direct fetch %s returned status %d", url, resp.status_code)
+    except Exception as e:
+        logger.warning("Direct fetch %s failed: %s", url, e)
 
     # Attempt 2+: try each proxy
     for template in _PROXY_TEMPLATES:
@@ -381,9 +400,12 @@ async def _resilient_get(
             resp = await client.get(proxy_url, headers=hdrs, follow_redirects=True, timeout=20.0)
             if resp.status_code == 200 and len(resp.text) > 500:
                 return resp
-        except Exception:
+            logger.debug("Proxy %s returned status %d (len=%d)", proxy_url, resp.status_code, len(resp.text))
+        except Exception as e:
+            logger.debug("Proxy %s failed: %s", proxy_url, e)
             continue
 
+    logger.error("All fetch attempts failed for %s", url)
     return None
 
 
@@ -633,8 +655,8 @@ async def search_emc_products(drug_name: str) -> list[dict]:
                     "url": full_url,
                     "href": href,
                 })
-    except Exception:
-        pass
+    except Exception as e:
+        logger.error("EMC product search failed for '%s': %s", drug_name, e)
 
     return products
 
@@ -653,19 +675,38 @@ async def _fetch_single_smpc(client: httpx.AsyncClient, product_url: str, produc
         soup = BeautifulSoup(resp.text, "html.parser")
         result["status"] = "ok"
 
+        # EMC uses <details>/<summary> accordion elements for SmPC sections.
+        # Each section has a <summary> containing the section number (e.g. "4.2")
+        # and the content follows as siblings of the <summary> within <details>.
         for key, section_num in EMC_SECTIONS.items():
-            header = soup.find(
-                lambda tag, sn=section_num: tag.name in ["h2", "h3"] and sn in tag.text
-            )
-            if header:
-                content = []
-                for sibling in header.find_next_siblings():
-                    if sibling.name in ["h2", "h3"]:
-                        break
-                    content.append(sibling.get_text(strip=True))
-                result[key] = " ".join(content)
-            else:
-                result[key] = None
+            found = False
+            for details_tag in soup.find_all("details"):
+                summary = details_tag.find("summary")
+                if summary and section_num in summary.get_text():
+                    content_parts = []
+                    for child in details_tag.children:
+                        if child.name == "summary":
+                            continue
+                        text = child.get_text(strip=True) if hasattr(child, "get_text") else str(child).strip()
+                        if text:
+                            content_parts.append(text)
+                    result[key] = " ".join(content_parts) if content_parts else None
+                    found = True
+                    break
+            if not found:
+                # Fallback: try legacy h2/h3 approach for older EMC pages
+                header = soup.find(
+                    lambda tag, sn=section_num: tag.name in ["h2", "h3"] and sn in tag.text
+                )
+                if header:
+                    content = []
+                    for sibling in header.find_next_siblings():
+                        if sibling.name in ["h2", "h3"]:
+                            break
+                        content.append(sibling.get_text(strip=True))
+                    result[key] = " ".join(content) if content else None
+                else:
+                    result[key] = None
 
     except Exception as e:
         result["status"] = "error"
@@ -993,6 +1034,234 @@ def check_controlled_drug(drug_name: str, bnf_data: dict, supplementary_text: st
 
 
 # ===========================================================================
+# ICD-10 LOOKUP — free NLM API (no API key needed)
+# ===========================================================================
+# Common clinical terms mapped to standard ICD-10 block codes used by PICS.
+# Broad clinical terms are hardcoded below; specific mappings are loaded from
+# contraindication_icd10_lookup.json (extracted from reverse-engineered drugsheets).
+_COMMON_ICD10_MAP: dict[str, dict] = {
+    # --- Broad clinical terms (curated, handle fuzzy BNF/EMC language) ---
+    "hepatic impairment": {"icd10_code": "K70-K77", "description": "Diseases of liver"},
+    "hepatic failure": {"icd10_code": "K72", "description": "Hepatic failure, not elsewhere classified"},
+    "liver disease": {"icd10_code": "K70-K77", "description": "Diseases of liver"},
+    "liver failure": {"icd10_code": "K72", "description": "Hepatic failure, not elsewhere classified"},
+    "severe hepatic impairment": {"icd10_code": "K72", "description": "Hepatic failure"},
+    "renal impairment": {"icd10_code": "N17-N19", "description": "Renal failure"},
+    "renal failure": {"icd10_code": "N17-N19", "description": "Renal failure"},
+    "severe renal impairment": {"icd10_code": "N18.4-N18.5", "description": "Chronic kidney disease, stage 4-5"},
+    "kidney disease": {"icd10_code": "N17-N19", "description": "Renal failure"},
+    "diabetes": {"icd10_code": "E10-E14", "description": "Diabetes mellitus"},
+    "diabetes mellitus": {"icd10_code": "E10-E14", "description": "Diabetes mellitus"},
+    "type 1 diabetes": {"icd10_code": "E10", "description": "Type 1 diabetes mellitus"},
+    "type 1 diabetes mellitus": {"icd10_code": "E10", "description": "Type 1 diabetes mellitus"},
+    "type 2 diabetes": {"icd10_code": "E11", "description": "Type 2 diabetes mellitus"},
+    "type 2 diabetes mellitus": {"icd10_code": "E11", "description": "Type 2 diabetes mellitus"},
+    "diabetic ketoacidosis": {"icd10_code": "E10.1-E14.1", "description": "Diabetes mellitus with ketoacidosis"},
+    "heart failure": {"icd10_code": "I50", "description": "Heart failure"},
+    "cardiac failure": {"icd10_code": "I50", "description": "Heart failure"},
+    "hypotension": {"icd10_code": "I95", "description": "Hypotension"},
+    "hypertension": {"icd10_code": "I10-I15", "description": "Hypertensive diseases"},
+    "hyperkalaemia": {"icd10_code": "E87.5", "description": "Hyperkalaemia"},
+    "hypokalaemia": {"icd10_code": "E87.6", "description": "Hypokalaemia"},
+    "hypercalcaemia": {"icd10_code": "E83.5", "description": "Disorders of calcium metabolism"},
+    "hyponatraemia": {"icd10_code": "E87.1", "description": "Hypo-osmolality and hyponatraemia"},
+    "epilepsy": {"icd10_code": "G40", "description": "Epilepsy"},
+    "seizures": {"icd10_code": "G40-G41", "description": "Epilepsy and status epilepticus"},
+    "asthma": {"icd10_code": "J45", "description": "Asthma"},
+    "copd": {"icd10_code": "J44", "description": "Other chronic obstructive pulmonary disease"},
+    "pregnancy": {"icd10_code": "BNF_F10_55", "description": "Pregnancy and Lactation"},
+    "breast-feeding": {"icd10_code": "BNF_F10_55", "description": "Pregnancy and Lactation"},
+    "breastfeeding": {"icd10_code": "BNF_F10_55", "description": "Pregnancy and Lactation"},
+    "lactation": {"icd10_code": "BNF_F10_55", "description": "Pregnancy and Lactation"},
+    "porphyria": {"icd10_code": "E80.2", "description": "Other porphyria"},
+    "myasthenia gravis": {"icd10_code": "G70.0", "description": "Myasthenia gravis"},
+    "glaucoma": {"icd10_code": "H40", "description": "Glaucoma"},
+    "hypothyroidism": {"icd10_code": "E03", "description": "Other hypothyroidism"},
+    "hyperthyroidism": {"icd10_code": "E05", "description": "Thyrotoxicosis"},
+    "phaeochromocytoma": {"icd10_code": "D35.0", "description": "Benign neoplasm of adrenal gland"},
+    "qt prolongation": {"icd10_code": "I49.8", "description": "Other specified cardiac arrhythmias"},
+    "long qt": {"icd10_code": "I49.8", "description": "Other specified cardiac arrhythmias"},
+    "elderly": {"icd10_code": "AGE_RANGE", "description": "Age-based condition (use age trigger, not ICD-10)"},
+    "volume depletion": {"icd10_code": "E86", "description": "Volume depletion"},
+    "dehydration": {"icd10_code": "E86.0", "description": "Dehydration"},
+    "anaphylaxis": {"icd10_code": "T78.2", "description": "Anaphylactic shock, unspecified"},
+    "angioedema": {"icd10_code": "T78.3", "description": "Angioneurotic oedema"},
+    "hypersensitivity": {"icd10_code": "T78.4", "description": "Allergy, unspecified"},
+    "bleeding": {"icd10_code": "D68.3", "description": "Haemorrhagic disorder due to circulating anticoagulants"},
+    "peptic ulcer": {"icd10_code": "K25-K28", "description": "Peptic ulcer"},
+    "gi bleeding": {"icd10_code": "K92.2", "description": "Gastrointestinal haemorrhage, unspecified"},
+    "pancreatitis": {"icd10_code": "K85", "description": "Acute pancreatitis"},
+    "bone marrow suppression": {"icd10_code": "D61", "description": "Other aplastic anaemias"},
+    "neutropenia": {"icd10_code": "D70", "description": "Agranulocytosis"},
+    "thrombocytopenia": {"icd10_code": "D69.6", "description": "Thrombocytopenia, unspecified"},
+}
+
+# Load supplementary ICD-10 mappings extracted from reverse-engineered drugsheets.
+# The JSON file is maintained separately and can be expanded by processing more
+# drugsheet PDFs without editing this source file.
+_ICD10_LOOKUP_JSON = PROJECT_ROOT.parent / "Reverse drugsheets" / "contraindication_icd10_lookup.json"
+if _ICD10_LOOKUP_JSON.exists():
+    try:
+        with open(_ICD10_LOOKUP_JSON, "r", encoding="utf-8") as _f:
+            _json_icd10 = json.load(_f)
+        # Merge: JSON entries only added if not already in the curated map
+        _added = 0
+        for _key, _val in _json_icd10.items():
+            _key_lower = _key.lower().strip()
+            if _key_lower not in _COMMON_ICD10_MAP:
+                _COMMON_ICD10_MAP[_key_lower] = _val
+                _added += 1
+        logger.info("Loaded %d supplementary ICD-10 mappings from lookup JSON (%d new)", len(_json_icd10), _added)
+        del _json_icd10, _added, _f
+    except Exception as _e:
+        logger.warning("Failed to load ICD-10 lookup JSON: %s", _e)
+del _ICD10_LOOKUP_JSON
+
+_icd10_cache: dict[str, dict | None] = {}
+
+_ICD10_NLM_URL = "https://clinicaltables.nlm.nih.gov/api/icd10cm/v3/search"
+
+
+def lookup_icd10_nlm(condition: str) -> dict | None:
+    """Query the free US NLM ICD-10-CM API for the best matching code.
+
+    Returns dict with 'icd10_code' and 'description', or None if no match.
+    The API is completely free, no authentication required.
+    Results are cached in-memory to avoid repeated calls.
+    """
+    key = condition.lower().strip()
+    if key in _icd10_cache:
+        return _icd10_cache[key]
+
+    # Clean the condition text for a better search
+    search_term = re.sub(r"\(.*?\)", "", condition)  # remove parenthetical qualifiers
+    search_term = re.sub(r"(?:contraindication|caution):?\s*", "", search_term, flags=re.IGNORECASE)
+    search_term = search_term.strip()
+
+    if len(search_term) < 3:
+        _icd10_cache[key] = None
+        return None
+
+    try:
+        import httpx as _httpx
+        resp = _httpx.get(
+            _ICD10_NLM_URL,
+            params={"sf": "code,name", "terms": search_term, "maxList": 5},
+            timeout=8.0,
+        )
+        if resp.status_code == 200:
+            data = resp.json()
+            total = data[0]
+            matches = data[3] if len(data) > 3 else []
+            if matches:
+                # Return the best match — NLM returns [code, description] pairs
+                best = matches[0]
+                result = {"icd10_code": best[0], "description": best[1]}
+                _icd10_cache[key] = result
+                return result
+    except Exception as e:
+        logger.debug("NLM ICD-10 lookup failed for '%s': %s", condition, e)
+
+    _icd10_cache[key] = None
+    return None
+
+
+def map_condition_to_icd10(condition: str, kb: KnowledgeBase) -> dict:
+    """Map a clinical condition to ICD-10 using a tiered approach:
+
+    1. Curated common-terms map (most reliable for broad clinical terms)
+    2. Check local ICD10_usage.xlsx (existing PICS mappings)
+    3. Query free NLM ICD-10-CM API (for specific conditions)
+    4. Fall back to [NEEDS ICD-10 MAPPING] for manual review
+    """
+    # Clean condition text for matching
+    clean = re.sub(r"\(.*?\)", "", condition).strip().lower()
+    clean = re.sub(r"^(?:contraindication|caution):?\s*", "", clean).strip()
+
+    # Tier 0: curated common-terms map (handles broad clinical terms correctly)
+    # Check exact match first, then substring match
+    if clean in _COMMON_ICD10_MAP:
+        m = _COMMON_ICD10_MAP[clean]
+        return {"icd10_code": m["icd10_code"], "description": m["description"],
+                "source": "Curated clinical map", "confidence": "high"}
+    for key, m in _COMMON_ICD10_MAP.items():
+        if key in clean or clean in key:
+            return {"icd10_code": m["icd10_code"], "description": m["description"],
+                    "source": "Curated clinical map", "confidence": "high"}
+
+    # Tier 1: local knowledge base
+    local = kb.find_icd10_mapping(condition)
+    if local and local.get("icd10_code"):
+        return {
+            "icd10_code": local["icd10_code"],
+            "description": local.get("description", ""),
+            "source": "PICS Knowledge Base",
+            "confidence": "high",
+        }
+
+    # Tier 2: free NLM API
+    nlm = lookup_icd10_nlm(condition)
+    if nlm:
+        return {
+            "icd10_code": nlm["icd10_code"],
+            "description": nlm["description"],
+            "source": "NLM ICD-10-CM API",
+            "confidence": "medium",
+        }
+
+    # Tier 3: no match — return enough context for Claude reasoning to pick up
+    logger.info("ICD-10 UNMAPPED: '%s' (cleaned: '%s') — needs Claude reasoning or manual review", condition, clean)
+    return {
+        "icd10_code": "[NEEDS ICD-10 MAPPING]",
+        "description": "",
+        "source": "unmapped",
+        "confidence": "none",
+        "original_text": condition,
+        "cleaned_text": clean,
+    }
+
+
+def save_icd10_mapping(condition: str, icd10_code: str, description: str) -> bool:
+    """Save a newly resolved ICD-10 mapping to the lookup JSON file.
+
+    Called by the generate-drugsheet skill after Claude reasoning resolves
+    an unmapped condition. This grows the curated map over time so future
+    runs benefit automatically.
+
+    Returns True if saved successfully, False otherwise.
+    """
+    lookup_path = PROJECT_ROOT.parent / "Reverse drugsheets" / "contraindication_icd10_lookup.json"
+    key = condition.lower().strip()
+
+    # Load existing
+    existing = {}
+    if lookup_path.exists():
+        try:
+            with open(lookup_path, "r", encoding="utf-8") as f:
+                existing = json.load(f)
+        except Exception as e:
+            logger.warning("Failed to read ICD-10 lookup JSON: %s", e)
+            return False
+
+    # Add/update
+    existing[key] = {"icd10_code": icd10_code, "description": description}
+
+    # Also add to in-memory map immediately
+    _COMMON_ICD10_MAP[key] = {"icd10_code": icd10_code, "description": description}
+
+    # Write back
+    try:
+        lookup_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(lookup_path, "w", encoding="utf-8") as f:
+            json.dump(existing, f, indent=2, ensure_ascii=False)
+        logger.info("Saved ICD-10 mapping: '%s' -> %s (%s)", key, icd10_code, description)
+        return True
+    except Exception as e:
+        logger.warning("Failed to write ICD-10 lookup JSON: %s", e)
+        return False
+
+
+# ===========================================================================
 # ANALYSIS — CONTRAINDICATIONS & ICD-10 MAPPING
 # ===========================================================================
 def analyze_contraindications(bnf_data: dict, emc_data: dict, kb: KnowledgeBase, supplementary_text: str = "") -> list[dict]:
@@ -1023,19 +1292,21 @@ def analyze_contraindications(bnf_data: dict, emc_data: dict, kb: KnowledgeBase,
                 cond = cond.strip()
                 if len(cond) < 3 or cond.lower() in ["contraindications", "cautions"]:
                     continue
-                # Try ICD-10 mapping
-                icd_map = kb.find_icd10_mapping(cond)
+                icd = map_condition_to_icd10(cond, kb)
                 items.append({
                     "type": section_key.rstrip("s"),  # "contraindication" or "caution"
                     "condition": cond,
-                    "icd10_code": icd_map["icd10_code"] if icd_map else "[NEEDS ICD-10 MAPPING]",
+                    "icd10_code": icd["icd10_code"],
+                    "icd10_description": icd.get("description", ""),
+                    "icd10_source": icd.get("source", ""),
+                    "icd10_confidence": icd.get("confidence", ""),
                     "description": f"{prefix}: {cond}",
                     "warning_level": default_level,
                     "source": "BNF",
                     "pics_message_code": "[TO BE COMPLETED]",
                 })
 
-    # Extract from EMC Section 4.3
+    # Extract from EMC Section 4.3 (contraindications)
     emc_contra = emc_data.get("4.3_contraindications", "") or ""
     if emc_contra:
         conditions = re.split(r"[.;]", emc_contra)
@@ -1043,20 +1314,54 @@ def analyze_contraindications(bnf_data: dict, emc_data: dict, kb: KnowledgeBase,
             cond = cond.strip()
             if len(cond) < 5:
                 continue
-            # Check if already captured from BNF
             already = any(
                 cond.lower()[:20] in item["condition"].lower()
                 for item in items
             )
             if not already:
-                icd_map = kb.find_icd10_mapping(cond)
+                icd = map_condition_to_icd10(cond, kb)
                 items.append({
                     "type": "contraindication",
                     "condition": cond,
-                    "icd10_code": icd_map["icd10_code"] if icd_map else "[NEEDS ICD-10 MAPPING]",
+                    "icd10_code": icd["icd10_code"],
+                    "icd10_description": icd.get("description", ""),
+                    "icd10_source": icd.get("source", ""),
+                    "icd10_confidence": icd.get("confidence", ""),
                     "description": f"contraindication: {cond}",
                     "warning_level": 2,
                     "source": "EMC SmPC 4.3",
+                    "pics_message_code": "[TO BE COMPLETED]",
+                })
+
+    # Extract from EMC Section 4.4 (special warnings — mapped as cautions)
+    emc_warnings = emc_data.get("4.4_special_warnings", "") or ""
+    if emc_warnings:
+        # EMC 4.4 is longer prose — extract key warning headings/topics
+        # Look for capitalised heading patterns that indicate a clinical condition
+        warning_headings = re.findall(
+            r"(?:^|\n)([A-Z][a-z]+(?:\s+[a-z]+){0,4}?)(?=\n|[A-Z][a-z])",
+            emc_warnings,
+        )
+        for cond in warning_headings:
+            cond = cond.strip()
+            if len(cond) < 5 or len(cond) > 80:
+                continue
+            already = any(
+                cond.lower()[:15] in item["condition"].lower()
+                for item in items
+            )
+            if not already:
+                icd = map_condition_to_icd10(cond, kb)
+                items.append({
+                    "type": "caution",
+                    "condition": cond,
+                    "icd10_code": icd["icd10_code"],
+                    "icd10_description": icd.get("description", ""),
+                    "icd10_source": icd.get("source", ""),
+                    "icd10_confidence": icd.get("confidence", ""),
+                    "description": f"caution: {cond}",
+                    "warning_level": 1,
+                    "source": "EMC SmPC 4.4",
                     "pics_message_code": "[TO BE COMPLETED]",
                 })
 
@@ -1077,11 +1382,14 @@ def analyze_contraindications(bnf_data: dict, emc_data: dict, kb: KnowledgeBase,
                     for item in items
                 )
                 if not already:
-                    icd_map = kb.find_icd10_mapping(cond)
+                    icd = map_condition_to_icd10(cond, kb)
                     items.append({
                         "type": ci_type,
                         "condition": cond,
-                        "icd10_code": icd_map["icd10_code"] if icd_map else "[NEEDS ICD-10 MAPPING]",
+                        "icd10_code": icd["icd10_code"],
+                        "icd10_description": icd.get("description", ""),
+                        "icd10_source": icd.get("source", ""),
+                        "icd10_confidence": icd.get("confidence", ""),
                         "description": f"{ci_type}: {cond}",
                         "warning_level": level,
                         "source": "Uploaded document",
@@ -1094,15 +1402,66 @@ def analyze_contraindications(bnf_data: dict, emc_data: dict, kb: KnowledgeBase,
 # ===========================================================================
 # ANALYSIS — INTERACTIONS
 # ===========================================================================
+def _extract_emc_interaction_drugs(emc_text: str) -> list[dict]:
+    """Parse EMC section 4.5 text to extract interacting drug/substance names.
+
+    EMC interaction sections are semi-structured prose.  We look for
+    capitalised drug names at the start of paragraphs, bold headings, and
+    common phrasing patterns such as "Interaction with <Drug>".
+    """
+    if not emc_text:
+        return []
+
+    results = []
+    seen = set()
+
+    # Pattern 1: Paragraphs that start with a capitalised drug/class name
+    #   e.g. "ProbenecidConcomitant use..." or "Methotrexate\nIn common with..."
+    # EMC often runs the heading into the body text with no separator.
+    for m in re.finditer(
+        r"(?:^|\n|(?<=[.;]) )([A-Z][a-z]+(?:\s+[a-z]+){0,3}?)(?=[A-Z][a-z]|Concomitant|The |Co-admin|In |May |Should |Caution)",
+        emc_text,
+    ):
+        name = m.group(1).strip()
+        if len(name) >= 4 and name.lower() not in seen:
+            seen.add(name.lower())
+            results.append({"interacting_drug": name, "severity": "Unknown", "detail": "", "source": "EMC SmPC 4.5"})
+
+    # Pattern 2: Explicit heading-like lines (drug name followed by newline or colon)
+    for m in re.finditer(r"(?:^|\n)([A-Z][A-Za-z /()-]+?)(?:\n|:)", emc_text):
+        name = m.group(1).strip()
+        if 4 <= len(name) <= 60 and name.lower() not in seen:
+            seen.add(name.lower())
+            results.append({"interacting_drug": name, "severity": "Unknown", "detail": "", "source": "EMC SmPC 4.5"})
+
+    return results
+
+
 def analyze_interactions(
     bnf_interactions: dict, bnf_data: dict, emc_data: dict, kb: KnowledgeBase
 ) -> dict:
-    """Analyze interactions: map to drug classes, identify trends, assign warning levels."""
+    """Analyze interactions from BNF *and* EMC: map to drug classes, identify trends, assign warning levels."""
     interactions = []
     class_coverage = {}
     unclassed_drugs = []
 
     raw_interactions = bnf_interactions.get("interactions", [])
+
+    # Merge EMC 4.5 interactions that aren't already covered by BNF
+    bnf_drug_names = {ix.get("interacting_drug", "").lower() for ix in raw_interactions}
+    emc_interactions_text = emc_data.get("4.5_interactions", "") or ""
+    if emc_interactions_text:
+        emc_extras = _extract_emc_interaction_drugs(emc_interactions_text)
+        for emc_ix in emc_extras:
+            if emc_ix["interacting_drug"].lower() not in bnf_drug_names:
+                # Try to extract context from the surrounding text
+                name = emc_ix["interacting_drug"]
+                idx = emc_interactions_text.lower().find(name.lower())
+                if idx >= 0:
+                    snippet = emc_interactions_text[idx:idx + 300]
+                    emc_ix["detail"] = snippet
+                raw_interactions.append(emc_ix)
+                bnf_drug_names.add(name.lower())
 
     for ix in raw_interactions:
         interacting = ix.get("interacting_drug", "")
@@ -1143,6 +1502,7 @@ def analyze_interactions(
             "detail": detail[:300],
             "pics_message_code": "[TO BE COMPLETED]",
             "message": detail[:200],
+            "source": ix.get("source", "BNF"),
         })
 
     # Check coverage — flag if majority but not all drugs in a class

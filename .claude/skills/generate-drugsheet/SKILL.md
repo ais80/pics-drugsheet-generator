@@ -65,9 +65,17 @@ Using `emc-smpc` MCP:
 ### Agent 7: Contraindications & Cautions → ICD-10
 - Combine contraindications from BNF (Agent 3) and EMC Section 4.3 (Agent 4)
 - Combine cautions from BNF and EMC Section 4.4
-- For each contraindication/caution, map to ICD-10 code(s):
-  - First check `Knowledge base/ICD10_usage.xlsx` for existing mappings
-  - Use the ICD-10 Codes cloud MCP for any not found locally
+- For each contraindication/caution, map to ICD-10 code(s) using a tiered approach:
+  1. **Curated lookup** — check `_COMMON_ICD10_MAP` in generate.py (202+ entries loaded from hardcoded broad terms + `Reverse drugsheets/contraindication_icd10_lookup.json`)
+  2. **Local KB** — check `Knowledge base/ICD10_usage.xlsx` for existing PICS mappings
+  3. **NLM API** — query the free NLM ICD-10-CM API (`clinicaltables.nlm.nih.gov`) for specific conditions
+  4. **Claude reasoning (this step)** — for any conditions still unmapped after tiers 1-3, use Claude's clinical reasoning to:
+    - Interpret the BNF/EMC prose and identify the precise clinical meaning
+    - Formulate a refined, specific search term for the NLM API (e.g. "avoid in severe hepatic impairment" → search "hepatic failure" not "avoid in severe hepatic impairment")
+    - If NLM still returns a poor match, reason from ICD-10 chapter structure to identify the correct code/range
+    - Validate the final code makes clinical sense (e.g. a renal condition should map to N-codes, not pregnancy O-codes)
+    - **Write newly resolved mappings back** to `Reverse drugsheets/contraindication_icd10_lookup.json` so future runs benefit automatically
+  5. Only if Claude cannot confidently determine the code, mark as `[NEEDS ICD-10 MAPPING]` for human review
 - Format descriptions:
   - Contraindications: prefix with `contraindication:`
   - Cautions: prefix with `caution:`
