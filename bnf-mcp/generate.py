@@ -5,6 +5,7 @@ Performs rule-based analysis and compiles into drugsheet output formats.
 """
 
 import asyncio
+import html as html_mod
 import json
 import logging
 import os
@@ -26,11 +27,14 @@ warnings.filterwarnings("ignore", category=MarkupResemblesLocatorWarning)
 # Paths
 # ---------------------------------------------------------------------------
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-KB_DIR = (
-    PROJECT_ROOT / "Knowledge_base"
-    if (PROJECT_ROOT / "Knowledge_base").exists()
-    else PROJECT_ROOT / "Knowledge base"
-)
+# Knowledge base may be inside PROJECT_ROOT or one level above it
+_KB_CANDIDATES = [
+    PROJECT_ROOT / "Knowledge_base",
+    PROJECT_ROOT / "Knowledge base",
+    PROJECT_ROOT.parent / "Knowledge_base",
+    PROJECT_ROOT.parent / "Knowledge base",
+]
+KB_DIR = next((p for p in _KB_CANDIDATES if p.exists()), PROJECT_ROOT / "Knowledge base")
 OUTPUT_DIR = PROJECT_ROOT / "output"
 OUTPUT_DIR.mkdir(exist_ok=True)
 
@@ -93,6 +97,184 @@ EMC_SECTIONS = {
     "4.8_undesirable_effects": "4.8",
 }
 
+# ---------------------------------------------------------------------------
+# BNF form name → PICS form name mapping (curated)
+# ---------------------------------------------------------------------------
+_BNF_TO_PICS_FORM_MAP: dict[str, str] = {
+    # Oral solid forms
+    "Oral tablet": "Tablet",
+    "Tablet": "Tablet",
+    "Chewable tablet": "Chewable tablet",
+    "Chewable tablets": "Chewable tablet",
+    "Dispersible tablet": "Dispersible Tablet",
+    "Dispersible tablets": "Dispersible Tablet",
+    "Orodispersible tablet": "Orodispersible Tablet",
+    "Orodispersible tablets": "Orodispersible Tablet",
+    "Effervescent tablet": "Dispersible Tablet",
+    "Effervescent tablets": "Dispersible Tablet",
+    "Gastro-resistant tablet": "Gastro Resistant Tablet",
+    "Gastro-resistant tablets": "Gastro Resistant Tablet",
+    "Modified-release tablet": "Modified Release Tablet",
+    "Modified-release tablets": "Modified Release Tablet",
+    "Prolonged-release tablet": "Prolonged Release Tablet",
+    "Prolonged-release tablets": "Prolonged Release Tablet",
+    "Sublingual tablet": "Sub-lingual Tablet",
+    "Sublingual tablets": "Sub-lingual Tablet",
+    "Buccal tablet": "Buccal Tablet",
+    "Buccal tablets": "Buccal Tablet",
+    "Oral capsule": "Capsule",
+    "Capsule": "Capsule",
+    "Gastro-resistant capsule": "Gastro Resistant Capsule",
+    "Gastro-resistant capsules": "Gastro Resistant Capsule",
+    "Modified-release capsule": "Modified Release Capsule",
+    "Modified-release capsules": "Modified Release Capsule",
+    "Slow release capsule": "Slow Release Capsule",
+    # Oral liquid forms
+    "Oral solution": "Oral Solution",
+    "Oral suspension": "Suspension",
+    "Oral drops": "Oral Drops",
+    "Oral emulsion": "Oral Solution",
+    "Syrup": "Syrup",
+    "Elixir": "Elixir",
+    "Mixture": "Mixture",
+    "Oral gel": "Oral Gel",
+    "Oral spray": "Oral Spray",
+    "Oral lyophilisate": "Oral lyophilisate",
+    "Orodispersible film": "Orodispersible Film",
+    # Oral solid (other)
+    "Granules": "Granules",
+    "Oral powder": "Powder",
+    "Powder": "Powder",
+    "Sachet": "Granules",
+    "Lozenge": "Lozenge",
+    "Pastille": "Pastille",
+    "Chewing gum": "Chewing Gum",
+    # Parenteral
+    "Solution for injection": "Injection",
+    "Solution for infusion": "Infusion",
+    "Powder for solution for injection": "Injection",
+    "Powder for solution for infusion": "Infusion",
+    "Powder and solvent for solution for injection": "Injection",
+    "Powder and solvent for solution for infusion": "Infusion",
+    "Emulsion for injection": "Injection",
+    "Suspension for injection": "Injection",
+    "Solution for injection ampoules": "Injection",
+    "Solution for injection pre-filled syringes": "Pre-filled syringe",
+    "Solution for injection pre-filled pens": "Injection",
+    "Implant": "Injection",
+    # Topical
+    "Cream": "Cream",
+    "Ointment": "Ointment",
+    "Gel": "Gel",
+    "Cutaneous solution": "Solution",
+    "Cutaneous emulsion": "Cream",
+    "Lotion": "Lotion",
+    "Paste": "Paste",
+    "Mousse": "Mousse",
+    "Foam": "Foam Aerosol",
+    "Scalp application": "Scalp Application",
+    "Shampoo": "Wash",
+    "Nail lacquer": "Nail Lacquer",
+    "Dusting powder": "Dusting Powder",
+    # Ophthalmic / Otic
+    "Eye drops": "Drops",
+    "Eye drop solution": "Drops",
+    "Eye ointment": "Eye ointment",
+    "Ear drops": "Drops",
+    "Ear/eye drops solution": "Drops",
+    "Ear spray": "Drops",
+    # Nasal
+    "Nasal spray": "Nasal Spray",
+    "Nasal drops": "Nasal Solution",
+    "Nasal ointment": "Nasal Ointment",
+    "Nasal gel": "Nasal Gel",
+    # Inhaled
+    "Pressurised inhalation": "Aerosol Inhalation",
+    "Inhalation powder": "Dry Powder Inhalation",
+    "Nebuliser liquid": "Nebuliser Solution",
+    "Nebuliser solution": "Nebuliser Solution",
+    "Nebuliser suspension": "Nebuliser Solution",
+    "Inhalation solution": "Nebuliser Solution",
+    "Inhalation vapour": "Inhalator",
+    # Rectal
+    "Suppository": "Suppository",
+    "Suppositories": "Suppository",
+    "Enema": "Enema",
+    "Rectal ointment": "Ointment",
+    "Rectal foam": "Foam Aerosol",
+    # Vaginal
+    "Pessary": "Pessary",
+    "Pessaries": "Pessary",
+    "Vaginal gel": "Gel",
+    "Vaginal cream": "Cream",
+    # Transdermal
+    "Transdermal patch": "Patch",
+    "Medicated plaster": "Patch",
+    # Other
+    "Mouthwash": "Mouthwash",
+    "Toothpaste": "Toothpaste",
+    "Irrigation solution": "Solution",
+    "Bandage": "Bandage",
+    "Dressing": "Dressing",
+    "Capsule with inhalation powder": "Dry Powder Inhalation",
+}
+
+# Enteral routes — unlicensed for oral forms
+_ENTERAL_ROUTES = {"Nasogastric", "Gastrostomy", "Nasojejunal", "Jejunostomy"}
+
+
+def _map_bnf_form_to_pics(bnf_form_name: str, pics_form_names: list[str]) -> str:
+    """Map a BNF medicinal form name to the matching PICS form name.
+
+    Tier 1: Curated dictionary lookup.
+    Tier 2: Strip BNF prefixes, case-normalize, exact match against PICS names.
+    Tier 3: Substring match (longest PICS name contained in BNF name or vice versa).
+    Fallback: Pass through BNF name, log warning.
+    """
+    # Tier 1: curated map
+    mapped = _BNF_TO_PICS_FORM_MAP.get(bnf_form_name)
+    if mapped:
+        return mapped
+
+    # Also try title-case and lowercase variants
+    for variant in [bnf_form_name.title(), bnf_form_name.lower()]:
+        mapped = _BNF_TO_PICS_FORM_MAP.get(variant)
+        if mapped:
+            return mapped
+
+    # Tier 2: strip common BNF prefixes and try exact PICS match
+    pics_lower_map = {n.lower(): n for n in pics_form_names}
+    stripped = bnf_form_name
+    for prefix in ("Oral ", "Cutaneous ", "Vaginal ", "Rectal ", "Nasal "):
+        if stripped.startswith(prefix):
+            stripped = stripped[len(prefix):]
+            break
+
+    if stripped.lower() in pics_lower_map:
+        return pics_lower_map[stripped.lower()]
+    # Try with trailing 's' removed (plural)
+    if stripped.lower().endswith("s") and stripped[:-1].lower() in pics_lower_map:
+        return pics_lower_map[stripped[:-1].lower()]
+
+    # Tier 3: substring match — longest PICS name found in BNF name or vice versa
+    bnf_lower = bnf_form_name.lower()
+    best_match = ""
+    best_len = 0
+    for pics_name in pics_form_names:
+        pl = pics_name.lower()
+        if pl in bnf_lower and len(pl) > best_len:
+            best_match = pics_name
+            best_len = len(pl)
+        elif bnf_lower in pl and len(bnf_lower) > best_len:
+            best_match = pics_name
+            best_len = len(bnf_lower)
+
+    if best_match:
+        return best_match
+
+    logger.warning("No PICS form match for BNF form %r — passing through", bnf_form_name)
+    return bnf_form_name
+
 
 # ===========================================================================
 # PDF EXTRACTION
@@ -145,7 +327,7 @@ class KnowledgeBase:
 
         try:
             fr_path = cleaned / "form_route.xlsx" if (cleaned / "form_route.xlsx").exists() else KB_DIR / "FormRoute.xlsx"
-            self.form_route = pd.read_excel(fr_path)
+            self.form_route = pd.read_excel(fr_path, header=None)
         except Exception:
             self.form_route = pd.DataFrame()
 
@@ -250,6 +432,42 @@ class KnowledgeBase:
                 "is_dmd": str(row.get("isDMD", "")),
             })
         return results
+
+    def get_pics_form_names(self) -> list[str]:
+        """Return all PICS form names from FormRoute.xlsx column 0 (rows 2+).
+
+        The spreadsheet layout is:
+          Row 0: header label row ('Count of ROUTE', 'routeDesc', ...)
+          Row 1: route names row ('formDesc', 'Oral', 'Topical', ...)
+          Row 2+: form names in column 0, with 1 in route columns where valid
+        """
+        if self.form_route is None or self.form_route.empty:
+            return []
+        forms = self.form_route.iloc[2:, 0].dropna().tolist()
+        # Filter out the 'Grand Total' row
+        return [str(f) for f in forms if str(f).strip() and str(f) != "Grand Total"]
+
+    def get_valid_routes(self, pics_form_name: str) -> list[str]:
+        """Look up valid routes for a PICS form from the FormRoute matrix.
+
+        Returns list of route names where cell == 1 for the given form row.
+        """
+        if self.form_route is None or self.form_route.empty:
+            return []
+        # Route names are in row 1, columns 1+
+        route_names = self.form_route.iloc[1, 1:].tolist()
+        # Find the row for this form (column 0, rows 2+)
+        form_col = self.form_route.iloc[2:, 0]
+        mask = form_col.astype(str).str.strip() == pics_form_name.strip()
+        matching_rows = self.form_route.iloc[2:][mask.values]
+        if matching_rows.empty:
+            return []
+        row = matching_rows.iloc[0]
+        routes = []
+        for j, (rn, val) in enumerate(zip(route_names, row.iloc[1:].tolist())):
+            if val == 1 and isinstance(rn, str) and rn.strip() and rn != "Grand Total":
+                routes.append(rn.strip())
+        return routes
 
 
 # ===========================================================================
@@ -548,14 +766,18 @@ async def gather_bnf_data(client: httpx.AsyncClient, drug_name: str) -> dict:
         med_forms = drug.get("medicinalForms", {})
         if med_forms:
             forms_parts = []
+            forms_list = []
             if med_forms.get("initialStatement"):
                 forms_parts.append(med_forms["initialStatement"])
             for form in med_forms.get("medicinalForms", []):
                 form_title = form.get("form", "")
                 if form_title:
                     forms_parts.append(form_title)
+                    forms_list.append(form_title)
             if forms_parts:
                 result["medicinal_forms"] = " | ".join(forms_parts)
+            if forms_list:
+                result["medicinal_forms_list"] = forms_list
 
         # Interactions note (just a reference — detailed data comes from gather_bnf_interactions)
         interactants = drug.get("interactants", [])
@@ -613,6 +835,104 @@ async def gather_bnf_interactions(client: httpx.AsyncClient, drug_name: str) -> 
 
     except Exception as e:
         result["error"] = str(e)
+
+    return result
+
+
+# ===========================================================================
+# DATA GATHERING — BNF MEDICINAL FORMS DETAIL (dm+d data via Gatsby API)
+# ===========================================================================
+async def gather_bnf_medicinal_forms(client: httpx.AsyncClient, drug_name: str) -> dict:
+    """Fetch detailed BNF medicinal forms data (preparations, strengths, AMP IDs).
+
+    Uses the separate medicinal-forms Gatsby endpoint which returns full dm+d data
+    including AMP SNOMED codes, strengths, pack sizes, CD schedule, and legal category.
+
+    Returns dict with 'forms' list, each containing:
+      - form: BNF form name (e.g. "Oral tablet")
+      - slug: URL slug
+      - strengths: deduplicated list of strength strings
+      - amp_ids: list of AMP SNOMED codes
+      - preps_count: number of preparations
+      - cd_schedule: controlled drug schedule if any
+      - legal_category: e.g. "POM"
+    """
+    slug = drug_name.lower().replace(" ", "-")
+    json_url = f"https://bnf.nice.org.uk/page-data/drugs/{slug}/medicinal-forms/page-data.json"
+    html_url = f"https://bnf.nice.org.uk/drugs/{slug}/medicinal-forms/"
+
+    result = {"source": html_url, "drug": drug_name, "forms": [], "status": "pending"}
+
+    try:
+        resp = await _resilient_get(client, json_url)
+        if resp is None:
+            result["status"] = "not_found"
+            result["error"] = "BNF medicinal forms endpoint not reachable"
+            return result
+
+        data = resp.json()
+        drug = data.get("result", {}).get("data", {}).get("bnfDrug", {})
+        if not drug:
+            result["status"] = "not_found"
+            return result
+
+        med_forms = drug.get("medicinalForms", {})
+        result["initial_statement"] = med_forms.get("initialStatement", "")
+        result["status"] = "ok"
+
+        for form_entry in med_forms.get("medicinalForms", []):
+            form_name = form_entry.get("form", "")
+            if not form_name:
+                continue
+
+            preps = form_entry.get("preps", [])
+            unique_strengths = set()
+            amp_ids = []
+            cd_schedule = None
+            legal_category = None
+
+            for prep in preps:
+                # Collect AMP ID
+                amp_id = prep.get("ampId", "")
+                if amp_id:
+                    amp_ids.append(amp_id)
+
+                # Collect strengths (unescape HTML entities like &#x2009; thin space)
+                for ai in prep.get("activeIngredients", []):
+                    unique_strengths.add(html_mod.unescape(ai))
+
+                # CD schedule (take first non-null)
+                if cd_schedule is None and prep.get("controlledDrugSchedule"):
+                    cd_schedule = prep["controlledDrugSchedule"]
+
+                # Legal category (take first non-null)
+                if legal_category is None:
+                    for pack in prep.get("packs", []):
+                        if pack.get("legalCategory"):
+                            legal_category = pack["legalCategory"]
+                            break
+
+            result["forms"].append({
+                "form": form_name,
+                "slug": form_entry.get("slug", ""),
+                "strengths": sorted(unique_strengths),
+                "amp_ids": amp_ids,
+                "preps_count": len(preps),
+                "cd_schedule": cd_schedule,
+                "legal_category": legal_category,
+            })
+
+        logger.info(
+            "BNF medicinal forms for %s: %d forms, %d total preps",
+            drug_name,
+            len(result["forms"]),
+            sum(f["preps_count"] for f in result["forms"]),
+        )
+
+    except Exception as e:
+        result["status"] = "error"
+        result["error"] = str(e)
+        logger.warning("Failed to fetch BNF medicinal forms for %s: %s", drug_name, e)
 
     return result
 
@@ -1762,54 +2082,159 @@ def extract_result_warnings(bnf_data: dict, emc_data: dict, supplementary_text: 
 # ===========================================================================
 # ANALYSIS — FORMS & ROUTES
 # ===========================================================================
-def extract_forms_and_routes(bnf_data: dict, emc_data: dict, kb: KnowledgeBase) -> list[dict]:
-    """Extract available forms and routes from BNF/EMC and cross-ref with FormRoute."""
+def extract_forms_and_routes(
+    bnf_data: dict,
+    emc_data: dict,
+    kb: KnowledgeBase,
+    bnf_medicinal_forms: dict | None = None,
+) -> list[dict]:
+    """Extract available forms and routes from BNF/EMC and cross-ref with FormRoute.xlsx.
+
+    Three-tier approach:
+      Primary: BNF medicinal-forms detail data → map to PICS form → FormRoute.xlsx routes → strengths/AMP IDs
+      Fallback 1: Form names from main BNF page → map to PICS form → FormRoute.xlsx routes (no strengths)
+      Fallback 2: Existing pattern-matching logic (last resort)
+
+    Enteral routes (NG, PEG, NJ, Jejunostomy) are always added for oral forms with licensed="N".
+    """
     forms = []
+    pics_form_names = kb.get_pics_form_names()
+    seen_form_routes: set[tuple[str, str]] = set()  # (form, route) dedup
 
-    # From BNF medicinal forms
-    med_forms_text = bnf_data.get("medicinal_forms", "") or ""
-    # Common form names
-    form_patterns = [
-        "tablet", "capsule", "oral solution", "oral suspension", "injection",
-        "infusion", "cream", "ointment", "gel", "eye drops", "ear drops",
-        "nasal spray", "inhaler", "suppository", "pessary", "patch",
-        "powder for solution", "granules", "chewable tablet", "dispersible tablet",
-        "modified-release tablet", "modified-release capsule", "effervescent tablet",
-    ]
+    def _add_form_route(
+        pics_form: str,
+        route: str,
+        licensed: str = "Y",
+        bnf_form: str = "",
+        strengths: list[str] | None = None,
+        amp_ids: list[str] | None = None,
+    ):
+        """Add a form-route entry, avoiding duplicates."""
+        key = (pics_form, route)
+        if key in seen_form_routes:
+            return
+        seen_form_routes.add(key)
+        forms.append({
+            "form": pics_form,
+            "bnf_form": bnf_form or pics_form,
+            "route": route,
+            "licensed": licensed,
+            "formulary_status": "[CHECK]",
+            "strengths": strengths or [],
+            "amp_ids": amp_ids or [],
+        })
 
-    for form_name in form_patterns:
-        if form_name.lower() in med_forms_text.lower():
-            # Determine likely routes for this form
-            routes = _form_to_routes(form_name)
-            for route in routes:
-                forms.append({
-                    "form": form_name.title(),
-                    "route": route,
-                    "licensed": "Y",
-                    "formulary_status": "[CHECK]",
-                })
+    # ---- Primary path: BNF medicinal-forms detail endpoint ----
+    bnf_mf = bnf_medicinal_forms or {}
+    bnf_mf_forms = bnf_mf.get("forms", [])
+    used_primary = False
 
-    # Add enteral routes for oral forms
-    oral_forms = [f for f in forms if f["route"] == "Oral"]
-    for of in oral_forms:
-        for enteral in ["Nasogastric", "Gastrostomy", "Nasojejunal", "Jejunostomy"]:
-            forms.append({
-                "form": of["form"],
-                "route": enteral,
-                "licensed": "N",
-                "formulary_status": "[CHECK]",
-            })
+    if bnf_mf_forms:
+        for mf in bnf_mf_forms:
+            bnf_form_name = mf.get("form", "")
+            if not bnf_form_name:
+                continue
+
+            pics_form = _map_bnf_form_to_pics(bnf_form_name, pics_form_names)
+
+            # Get routes from FormRoute.xlsx
+            kb_routes = kb.get_valid_routes(pics_form)
+            strengths = mf.get("strengths", [])
+            amp_ids = mf.get("amp_ids", [])
+
+            if kb_routes:
+                used_primary = True
+                for route in kb_routes:
+                    is_enteral = route in _ENTERAL_ROUTES
+                    _add_form_route(
+                        pics_form=pics_form,
+                        route=route,
+                        licensed="N" if is_enteral else "Y",
+                        bnf_form=bnf_form_name,
+                        strengths=strengths,
+                        amp_ids=amp_ids,
+                    )
+            else:
+                # FormRoute.xlsx has no row for this PICS form — use hardcoded fallback routes
+                used_primary = True
+                fallback_routes = _form_to_routes(bnf_form_name)
+                for route in fallback_routes:
+                    _add_form_route(
+                        pics_form=pics_form,
+                        route=route,
+                        licensed="Y",
+                        bnf_form=bnf_form_name,
+                        strengths=strengths,
+                        amp_ids=amp_ids,
+                    )
+                logger.warning(
+                    "PICS form %r (from BNF %r) not in FormRoute.xlsx — used hardcoded routes",
+                    pics_form, bnf_form_name,
+                )
+
+    # ---- Fallback 1: Form names from main BNF page ----
+    if not used_primary:
+        bnf_form_list = bnf_data.get("medicinal_forms_list", [])
+        if bnf_form_list:
+            for bnf_form_name in bnf_form_list:
+                pics_form = _map_bnf_form_to_pics(bnf_form_name, pics_form_names)
+                kb_routes = kb.get_valid_routes(pics_form)
+
+                if kb_routes:
+                    for route in kb_routes:
+                        is_enteral = route in _ENTERAL_ROUTES
+                        _add_form_route(
+                            pics_form=pics_form,
+                            route=route,
+                            licensed="N" if is_enteral else "Y",
+                            bnf_form=bnf_form_name,
+                        )
+                else:
+                    fallback_routes = _form_to_routes(bnf_form_name)
+                    for route in fallback_routes:
+                        _add_form_route(
+                            pics_form=pics_form,
+                            route=route,
+                            licensed="Y",
+                            bnf_form=bnf_form_name,
+                        )
+            used_primary = True  # mark so we don't fall through to pattern matching
+
+    # ---- Fallback 2: Pattern matching on flat text (last resort) ----
+    if not used_primary:
+        med_forms_text = bnf_data.get("medicinal_forms", "") or ""
+        form_patterns = [
+            "tablet", "capsule", "oral solution", "oral suspension", "injection",
+            "infusion", "cream", "ointment", "gel", "eye drops", "ear drops",
+            "nasal spray", "inhaler", "suppository", "pessary", "patch",
+            "powder for solution", "granules", "chewable tablet", "dispersible tablet",
+            "modified-release tablet", "modified-release capsule", "effervescent tablet",
+        ]
+
+        for form_name in form_patterns:
+            if form_name.lower() in med_forms_text.lower():
+                pics_form = _map_bnf_form_to_pics(form_name.title(), pics_form_names)
+                kb_routes = kb.get_valid_routes(pics_form)
+                routes = kb_routes if kb_routes else _form_to_routes(form_name)
+                for route in routes:
+                    is_enteral = route in _ENTERAL_ROUTES
+                    _add_form_route(
+                        pics_form=pics_form,
+                        route=route,
+                        licensed="N" if is_enteral else "Y",
+                        bnf_form=form_name.title(),
+                    )
 
     return forms
 
 
 def _form_to_routes(form_name: str) -> list[str]:
-    """Map a dosage form to its primary routes."""
+    """Map a dosage form to its primary routes (hardcoded fallback)."""
     form_lower = form_name.lower()
     if any(w in form_lower for w in ["tablet", "capsule", "solution", "suspension", "granule", "dispersible", "effervescent", "chewable"]):
         return ["Oral"]
     if "injection" in form_lower:
-        return ["Intravenous", "Intramuscular", "Subcutaneous"]
+        return ["Intravenous", "Intramuscular Inj.", "Subcutaneous"]
     if "infusion" in form_lower:
         return ["Intravenous Infusion"]
     if any(w in form_lower for w in ["cream", "ointment", "gel"]):
@@ -1820,14 +2245,20 @@ def _form_to_routes(form_name: str) -> list[str]:
         return ["Both Ears"]
     if "nasal" in form_lower:
         return ["Both Nostrils"]
-    if "inhaler" in form_lower:
+    if "inhaler" in form_lower or "inhalation" in form_lower:
         return ["Inhaled"]
+    if "nebuliser" in form_lower or "nebulizer" in form_lower:
+        return ["Nebuliser"]
     if "suppository" in form_lower:
         return ["Rectal"]
     if "pessary" in form_lower:
         return ["Vaginal"]
     if "patch" in form_lower:
         return ["Topical"]
+    if "enema" in form_lower:
+        return ["Rectal"]
+    if "mouthwash" in form_lower:
+        return ["Oromucosal"]
     return ["Oral"]
 
 
@@ -2058,18 +2489,26 @@ async def generate_drugsheet(
         emc_task = gather_emc_data(client, drug_name, selected_emc_products)
         formulary_task = gather_formulary_data(client, drug_name, drug_form)
         interactions_task = gather_bnf_interactions(client, drug_name)
+        med_forms_task = gather_bnf_medicinal_forms(client, drug_name)
 
-        bnf_data, emc_data, formulary_data, bnf_interactions = await asyncio.gather(
-            bnf_task, emc_task, formulary_task, interactions_task
+        bnf_data, emc_data, formulary_data, bnf_interactions, bnf_med_forms = await asyncio.gather(
+            bnf_task, emc_task, formulary_task, interactions_task, med_forms_task
         )
 
     drugsheet["bnf_data"] = bnf_data
     drugsheet["emc_data"] = emc_data
     drugsheet["formulary_data"] = formulary_data
+    drugsheet["bnf_medicinal_forms"] = bnf_med_forms
 
     # Add references
     if bnf_data.get("source"):
         drugsheet["references"].append({"source": "BNF", "url": bnf_data["source"], "accessed": today})
+    if bnf_med_forms.get("source") and bnf_med_forms.get("status") == "ok":
+        drugsheet["references"].append({
+            "source": "BNF Medicinal Forms (dm+d)",
+            "url": bnf_med_forms["source"],
+            "accessed": today,
+        })
     # Add all EMC SmPC sources
     if emc_data.get("all_sources"):
         for src in emc_data["all_sources"]:
@@ -2115,7 +2554,7 @@ async def generate_drugsheet(
 
     # Phase 3: Dosing & Forms
     _progress("Extracting forms, routes, and dose limits...")
-    drugsheet["forms_and_routes"] = extract_forms_and_routes(bnf_data, emc_data, kb)
+    drugsheet["forms_and_routes"] = extract_forms_and_routes(bnf_data, emc_data, kb, bnf_med_forms)
     drugsheet["dose_limits"] = extract_dose_limits(bnf_data, emc_data, supplementary_text)
 
     # Formulary status for amber handling
@@ -2322,11 +2761,50 @@ def generate_review_markdown(ds: dict) -> str:
     lines.append("## Forms & Routes")
     forms = ds.get("forms_and_routes", [])
     if forms:
-        lines.append("| Form | Route | Licensed | Formulary |")
-        lines.append("|---|---|---|---|")
-        for f in forms:
-            lines.append(f"| {f['form']} | {f['route']} | {f['licensed']} | {f['formulary_status']} |")
+        # Check if any forms have BNF form names or strengths
+        has_bnf_form = any(f.get("bnf_form") and f["bnf_form"] != f["form"] for f in forms)
+        has_strengths = any(f.get("strengths") for f in forms)
+
+        if has_bnf_form or has_strengths:
+            header = "| PICS Form | BNF Form | Route | Licensed | Formulary |"
+            sep = "|---|---|---|---|---|"
+            lines.append(header)
+            lines.append(sep)
+            for f in forms:
+                bnf_form = f.get("bnf_form", "")
+                bnf_col = bnf_form if bnf_form != f["form"] else ""
+                lines.append(
+                    f"| {f['form']} | {bnf_col} | {f['route']} | "
+                    f"{f['licensed']} | {f['formulary_status']} |"
+                )
+        else:
+            lines.append("| Form | Route | Licensed | Formulary |")
+            lines.append("|---|---|---|---|")
+            for f in forms:
+                lines.append(f"| {f['form']} | {f['route']} | {f['licensed']} | {f['formulary_status']} |")
     lines.append("")
+
+    # BNF Medicinal Forms — Strengths & AMP IDs (Table 9 enrichment)
+    bnf_mf = ds.get("bnf_medicinal_forms", {})
+    bnf_mf_forms = bnf_mf.get("forms", [])
+    if bnf_mf_forms:
+        lines.append("### BNF Strengths & dm+d AMP IDs")
+        for mf in bnf_mf_forms:
+            lines.append(f"\n**{mf['form']}** ({mf.get('preps_count', 0)} preparations)")
+            if mf.get("cd_schedule"):
+                lines.append(f"  - CD Schedule: {mf['cd_schedule']}")
+            if mf.get("legal_category"):
+                lines.append(f"  - Legal category: {mf['legal_category']}")
+            strengths = mf.get("strengths", [])
+            if strengths:
+                lines.append(f"  - Strengths ({len(strengths)}):")
+                for s in strengths:
+                    lines.append(f"    - {s}")
+            amp_ids = mf.get("amp_ids", [])
+            if amp_ids:
+                lines.append(f"  - AMP IDs ({len(amp_ids)} total): {', '.join(amp_ids[:5])}" +
+                             (f"... +{len(amp_ids)-5} more" if len(amp_ids) > 5 else ""))
+        lines.append("")
 
     # Table 20: Adult Dose Limits
     lines.append("## Dose Limits")
@@ -2422,6 +2900,7 @@ def generate_epma_json(ds: dict) -> dict:
         "table_7_prescriber_privilege": "[TO BE COMPLETED]",
         "table_8_directorates": "[TO BE COMPLETED]",
         "table_9_strengths": ds.get("tfqav_info", []),
+        "table_9_bnf_medicinal_forms": ds.get("bnf_medicinal_forms", {}),
         "table_10_drug_classes": ds.get("drug_classes", []),
         "table_11_contraindications": ds.get("contraindications", []),
         "table_12_interactions": ds.get("interactions_analysis", {}).get("interactions", []),
