@@ -135,6 +135,8 @@ form.addEventListener('submit', async (e) => {
         const reader = response.body.getReader();
         const decoder = new TextDecoder();
         let buffer = '';
+        let currentEvent = null;
+        let currentData = null;
 
         while (true) {
             const { done, value } = await reader.read();
@@ -142,16 +144,15 @@ form.addEventListener('submit', async (e) => {
 
             buffer += decoder.decode(value, { stream: true });
 
-            // Parse SSE events from buffer
-            const lines = buffer.split('\n');
-            buffer = '';
+            // Only process complete lines (keep incomplete trailing line in buffer)
+            const lastNewline = buffer.lastIndexOf('\n');
+            if (lastNewline === -1) continue; // no complete lines yet
 
-            let currentEvent = null;
-            let currentData = null;
+            const complete = buffer.slice(0, lastNewline);
+            buffer = buffer.slice(lastNewline + 1);
+            const lines = complete.split('\n');
 
-            for (let i = 0; i < lines.length; i++) {
-                const line = lines[i];
-
+            for (const line of lines) {
                 if (line.startsWith('event: ')) {
                     currentEvent = line.slice(7).trim();
                 } else if (line.startsWith('data: ')) {
@@ -161,11 +162,8 @@ form.addEventListener('submit', async (e) => {
                     handleSSEEvent(currentEvent, currentData);
                     currentEvent = null;
                     currentData = null;
-                } else if (line !== '') {
-                    // Incomplete event, put back in buffer
-                    buffer = lines.slice(i).join('\n');
-                    break;
                 }
+                // Other non-empty lines (shouldn't happen in well-formed SSE) are ignored
             }
         }
 
@@ -184,7 +182,8 @@ function handleSSEEvent(event, dataStr) {
     let data;
     try {
         data = JSON.parse(dataStr);
-    } catch {
+    } catch (e) {
+        console.error('SSE JSON parse error:', e, 'raw:', dataStr.slice(0, 200));
         return;
     }
 
@@ -193,11 +192,27 @@ function handleSSEEvent(event, dataStr) {
             updateProgress(data.message, data.percent);
             break;
         case 'complete':
-            onComplete(data);
+            // Fetch full result via GET (avoids large SSE payloads)
+            fetchAndShowResult(data.id, data.drug_name);
             break;
         case 'error':
             showError(data.message);
             break;
+    }
+}
+
+async function fetchAndShowResult(resultId, drugName) {
+    try {
+        updateProgress('Loading results...', 100);
+        const resp = await fetch(`/api/result/${resultId}`);
+        if (!resp.ok) {
+            throw new Error(`Failed to load results: ${resp.status} ${resp.statusText}`);
+        }
+        const data = await resp.json();
+        onComplete(data);
+    } catch (err) {
+        console.error('Failed to fetch result:', err);
+        showError(`Generation succeeded but failed to load results: ${err.message}`);
     }
 }
 

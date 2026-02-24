@@ -142,31 +142,30 @@ async def api_generate(
             yield _sse_event("error", {"message": str(e)})
             return
 
-        # Generate outputs
-        review_md = generate_review_markdown(drugsheet)
-        epma_json = generate_epma_json(drugsheet)
+        # Generate outputs and store for retrieval
+        try:
+            review_md = generate_review_markdown(drugsheet)
+            epma_json = generate_epma_json(drugsheet)
 
-        # Store for download
-        _cleanup_expired()
-        result_id = str(uuid.uuid4())
-        _results[result_id] = {
-            "drugsheet": drugsheet,
-            "markdown": review_md,
-            "epma_json": epma_json,
-            "drug_name": drug_name,
-            "created_at": time.time(),
-        }
+            _cleanup_expired()
+            result_id = str(uuid.uuid4())
+            _results[result_id] = {
+                "drugsheet": drugsheet,
+                "markdown": review_md,
+                "epma_json": epma_json,
+                "drug_name": drug_name,
+                "created_at": time.time(),
+            }
+        except Exception as e:
+            yield _sse_event("error", {"message": f"Failed to compile output: {e}"})
+            return
 
-        # Send complete event
+        # Send a small complete event — frontend fetches full data via /api/result
         yield _sse_event(
             "complete",
             {
                 "id": result_id,
                 "drug_name": drug_name,
-                "markdown": review_md,
-                "epma_json": epma_json,
-                "raw_data": drugsheet,
-                "human_review_flags": drugsheet.get("human_review_flags", []),
             },
         )
 
@@ -179,6 +178,24 @@ async def api_generate(
             "X-Accel-Buffering": "no",
         },
     )
+
+
+@app.get("/api/result/{result_id}")
+async def api_result(result_id: str):
+    """Fetch the full generated result (markdown, EPMA JSON, raw data, flags)."""
+    _cleanup_expired()
+    result = _results.get(result_id)
+    if not result:
+        return PlainTextResponse("Result not found or expired", status_code=404)
+
+    return {
+        "id": result_id,
+        "drug_name": result["drug_name"],
+        "markdown": result["markdown"],
+        "epma_json": result["epma_json"],
+        "raw_data": result["drugsheet"],
+        "human_review_flags": result["drugsheet"].get("human_review_flags", []),
+    }
 
 
 @app.get("/api/download/{result_id}/markdown")

@@ -1399,14 +1399,20 @@ _COMMON_ICD10_MAP: dict[str, dict] = {
     "hypothyroidism": {"icd10_code": "E03", "description": "Other hypothyroidism"},
     "hyperthyroidism": {"icd10_code": "E05", "description": "Thyrotoxicosis"},
     "phaeochromocytoma": {"icd10_code": "D35.0", "description": "Benign neoplasm of adrenal gland"},
-    "qt prolongation": {"icd10_code": "I49.8", "description": "Other specified cardiac arrhythmias"},
-    "long qt": {"icd10_code": "I49.8", "description": "Other specified cardiac arrhythmias"},
+    "pheochromocytoma": {"icd10_code": "D35.0", "description": "Benign neoplasm of adrenal gland"},
+    "qt prolongation": {"icd10_code": "I45.81", "description": "Long QT syndrome"},
+    "long qt": {"icd10_code": "I45.81", "description": "Long QT syndrome"},
+    "long qt syndrome": {"icd10_code": "I45.81", "description": "Long QT syndrome"},
+    "qtc prolongation": {"icd10_code": "I45.81", "description": "Long QT syndrome"},
+    "qtc-interval prolongation": {"icd10_code": "I45.81", "description": "Long QT syndrome"},
+    "qt interval prolongation": {"icd10_code": "I45.81", "description": "Long QT syndrome"},
     "elderly": {"icd10_code": "AGE_RANGE", "description": "Age-based condition (use age trigger, not ICD-10)"},
     "volume depletion": {"icd10_code": "E86", "description": "Volume depletion"},
     "dehydration": {"icd10_code": "E86.0", "description": "Dehydration"},
     "anaphylaxis": {"icd10_code": "T78.2", "description": "Anaphylactic shock, unspecified"},
     "angioedema": {"icd10_code": "T78.3", "description": "Angioneurotic oedema"},
     "hypersensitivity": {"icd10_code": "T78.4", "description": "Allergy, unspecified"},
+    "allergy": {"icd10_code": "T78.4", "description": "Allergy, unspecified"},
     "bleeding": {"icd10_code": "D68.3", "description": "Haemorrhagic disorder due to circulating anticoagulants"},
     "peptic ulcer": {"icd10_code": "K25-K28", "description": "Peptic ulcer"},
     "gi bleeding": {"icd10_code": "K92.2", "description": "Gastrointestinal haemorrhage, unspecified"},
@@ -1414,6 +1420,120 @@ _COMMON_ICD10_MAP: dict[str, dict] = {
     "bone marrow suppression": {"icd10_code": "D61", "description": "Other aplastic anaemias"},
     "neutropenia": {"icd10_code": "D70", "description": "Agranulocytosis"},
     "thrombocytopenia": {"icd10_code": "D69.6", "description": "Thrombocytopenia, unspecified"},
+    # --- Neurological / psychiatric ---
+    "dementia": {"icd10_code": "F03", "description": "Unspecified dementia"},
+    "dementia with lewy bodies": {"icd10_code": "G31.83", "description": "Neurocognitive disorder with Lewy bodies"},
+    "lewy body dementia": {"icd10_code": "G31.83", "description": "Neurocognitive disorder with Lewy bodies"},
+    "parkinson's disease": {"icd10_code": "G20", "description": "Parkinson's disease"},
+    "parkinsonism": {"icd10_code": "G20", "description": "Parkinson's disease"},
+    "progressive supranuclear palsy": {"icd10_code": "G23.1", "description": "Progressive supranuclear ophthalmoplegia"},
+    "neuroleptic malignant syndrome": {"icd10_code": "G21.0", "description": "Malignant neuroleptic syndrome"},
+    "cns depression": {"icd10_code": "R40.1", "description": "Stupor"},
+    "comatose state": {"icd10_code": "R40.20", "description": "Unspecified coma"},
+    "comatose states": {"icd10_code": "R40.20", "description": "Unspecified coma"},
+    "coma": {"icd10_code": "R40.20", "description": "Unspecified coma"},
+    "depression": {"icd10_code": "F32", "description": "Depressive episode"},
+    "suicidal ideation": {"icd10_code": "R45.851", "description": "Suicidal ideations"},
+    "tardive dyskinesia": {"icd10_code": "G24.01", "description": "Drug induced subacute dyskinesia"},
+    # --- Cardiac / vascular ---
+    "torsade de pointes": {"icd10_code": "I47.21", "description": "Torsades de pointes"},
+    "torsades de pointes": {"icd10_code": "I47.21", "description": "Torsades de pointes"},
+    "ventricular arrhythmia": {"icd10_code": "I49.01", "description": "Ventricular fibrillation"},
+    "ventricular arrhythmias": {"icd10_code": "I49.01", "description": "Ventricular fibrillation"},
+    "arrhythmia": {"icd10_code": "I49.9", "description": "Cardiac arrhythmia, unspecified"},
+    "arrhythmias": {"icd10_code": "I49.9", "description": "Cardiac arrhythmia, unspecified"},
+    "atrial fibrillation": {"icd10_code": "I48", "description": "Atrial fibrillation and flutter"},
+    "bradycardia": {"icd10_code": "R00.1", "description": "Bradycardia, unspecified"},
+    "tachycardia": {"icd10_code": "R00.0", "description": "Tachycardia, unspecified"},
+    "acute myocardial infarction": {"icd10_code": "I21.9", "description": "Acute myocardial infarction, unspecified"},
+    "myocardial infarction": {"icd10_code": "I21.9", "description": "Acute myocardial infarction, unspecified"},
+    "angina": {"icd10_code": "I20", "description": "Angina pectoris"},
+    "stroke": {"icd10_code": "I63", "description": "Cerebral infarction"},
+    "cerebrovascular disease": {"icd10_code": "I60-I69", "description": "Cerebrovascular diseases"},
+    "deep vein thrombosis": {"icd10_code": "I82.40", "description": "Acute embolism and thrombosis of unspecified deep veins of lower extremity"},
+    "pulmonary embolism": {"icd10_code": "I26", "description": "Pulmonary embolism"},
+    "thromboembolism": {"icd10_code": "I82", "description": "Other venous embolism and thrombosis"},
+    # --- Haematological ---
+    "blood dyscrasias": {"icd10_code": "D75.89", "description": "Other specified diseases of blood and blood-forming organs"},
+    "blood dyscrasia": {"icd10_code": "D75.89", "description": "Other specified diseases of blood and blood-forming organs"},
+    "agranulocytosis": {"icd10_code": "D70", "description": "Agranulocytosis"},
+    "anaemia": {"icd10_code": "D64.9", "description": "Anaemia, unspecified"},
+    "anemia": {"icd10_code": "D64.9", "description": "Anaemia, unspecified"},
+    "pancytopenia": {"icd10_code": "D61.818", "description": "Other pancytopenia"},
+    "haemolytic anaemia": {"icd10_code": "D59.9", "description": "Acquired haemolytic anaemia, unspecified"},
+    # --- Substance use ---
+    "alcohol": {"icd10_code": "F10", "description": "Alcohol related disorders"},
+    "alcohol exposure": {"icd10_code": "F10", "description": "Alcohol related disorders"},
+    "heavy alcohol exposure": {"icd10_code": "F10", "description": "Alcohol related disorders"},
+    "alcohol dependence": {"icd10_code": "F10.2", "description": "Alcohol dependence"},
+    "alcoholism": {"icd10_code": "F10.2", "description": "Alcohol dependence"},
+    "substance abuse": {"icd10_code": "F19", "description": "Other psychoactive substance related disorders"},
+    # --- Metabolic / endocrine ---
+    "electrolyte disturbances": {"icd10_code": "E87.8", "description": "Other disorders of electrolyte and fluid balance"},
+    "electrolyte imbalance": {"icd10_code": "E87.8", "description": "Other disorders of electrolyte and fluid balance"},
+    "hyperglycaemia": {"icd10_code": "R73.9", "description": "Hyperglycaemia, unspecified"},
+    "hypoglycaemia": {"icd10_code": "E16.2", "description": "Hypoglycaemia, unspecified"},
+    "metabolic acidosis": {"icd10_code": "E87.2", "description": "Acidosis"},
+    "hypomagnesaemia": {"icd10_code": "E83.42", "description": "Hypomagnesemia"},
+    "adrenal insufficiency": {"icd10_code": "E27.4", "description": "Other and unspecified adrenocortical insufficiency"},
+    "cushing's syndrome": {"icd10_code": "E24", "description": "Cushing's syndrome"},
+    "gout": {"icd10_code": "M10", "description": "Gout"},
+    "hyperprolactinaemia": {"icd10_code": "E22.1", "description": "Hyperprolactinemia"},
+    "hyperprolactinemia": {"icd10_code": "E22.1", "description": "Hyperprolactinemia"},
+    "prolactinaemia": {"icd10_code": "E22.1", "description": "Hyperprolactinemia"},
+    "prolactinemia": {"icd10_code": "E22.1", "description": "Hyperprolactinemia"},
+    "prolactin-dependent tumours": {"icd10_code": "D35.2", "description": "Benign neoplasm of pituitary gland"},
+    # --- Hepatic / GI ---
+    "jaundice": {"icd10_code": "R17", "description": "Unspecified jaundice"},
+    "cholestasis": {"icd10_code": "K83.1", "description": "Obstruction of bile duct"},
+    "hepatitis": {"icd10_code": "K75.9", "description": "Inflammatory liver disease, unspecified"},
+    "cirrhosis": {"icd10_code": "K74", "description": "Fibrosis and cirrhosis of liver"},
+    "ileus": {"icd10_code": "K56.7", "description": "Ileus, unspecified"},
+    "bowel obstruction": {"icd10_code": "K56.6", "description": "Other and unspecified intestinal obstruction"},
+    "intestinal obstruction": {"icd10_code": "K56.6", "description": "Other and unspecified intestinal obstruction"},
+    "colitis": {"icd10_code": "K52.9", "description": "Non-infective gastroenteritis and colitis, unspecified"},
+    # --- Respiratory ---
+    "respiratory depression": {"icd10_code": "J96.0", "description": "Acute respiratory failure"},
+    "respiratory failure": {"icd10_code": "J96", "description": "Respiratory failure"},
+    "pneumonia": {"icd10_code": "J18.9", "description": "Pneumonia, unspecified organism"},
+    "bronchospasm": {"icd10_code": "J98.01", "description": "Acute bronchospasm"},
+    # --- Dermatological ---
+    "photosensitivity": {"icd10_code": "L56.0", "description": "Drug phototoxic response"},
+    "photosensitisation": {"icd10_code": "L56.0", "description": "Drug phototoxic response"},
+    "stevens-johnson syndrome": {"icd10_code": "L51.1", "description": "Stevens-Johnson syndrome"},
+    "toxic epidermal necrolysis": {"icd10_code": "L51.2", "description": "Toxic epidermal necrolysis"},
+    "urticaria": {"icd10_code": "L50", "description": "Urticaria"},
+    "rash": {"icd10_code": "R21", "description": "Rash and other nonspecific skin eruption"},
+    # --- Infections ---
+    "glandular fever": {"icd10_code": "B27.90", "description": "Infectious mononucleosis, unspecified without complication"},
+    "infectious mononucleosis": {"icd10_code": "B27.90", "description": "Infectious mononucleosis, unspecified without complication"},
+    # --- Urological ---
+    "prostatic hypertrophy": {"icd10_code": "N40.0", "description": "Benign prostatic hyperplasia without lower urinary tract symptoms"},
+    "benign prostatic hyperplasia": {"icd10_code": "N40.0", "description": "Benign prostatic hyperplasia without lower urinary tract symptoms"},
+    "urinary retention": {"icd10_code": "R33.9", "description": "Retention of urine, unspecified"},
+    # --- Musculoskeletal ---
+    "rhabdomyolysis": {"icd10_code": "M62.82", "description": "Rhabdomyolysis"},
+    "osteoporosis": {"icd10_code": "M81", "description": "Osteoporosis without current pathological fracture"},
+    # --- Ophthalmic ---
+    "angle-closure glaucoma": {"icd10_code": "H40.2", "description": "Primary angle-closure glaucoma"},
+    "narrow-angle glaucoma": {"icd10_code": "H40.2", "description": "Primary angle-closure glaucoma"},
+    "raised intraocular pressure": {"icd10_code": "H40.0", "description": "Glaucoma suspect"},
+}
+
+# UK→US spelling map for NLM searches (NLM uses US English ICD-10-CM terminology)
+_UK_TO_US_SPELLING: dict[str, str] = {
+    "anaemia": "anemia", "leukaemia": "leukemia", "oedema": "edema",
+    "oesophageal": "esophageal", "oesophagus": "esophagus", "faeces": "feces",
+    "diarrhoea": "diarrhea", "haemorrhage": "hemorrhage", "haemolytic": "hemolytic",
+    "haemorrhagic": "hemorrhagic", "haematological": "hematological",
+    "ischaemia": "ischemia", "ischaemic": "ischemic",
+    "hypokalaemia": "hypokalemia", "hyperkalaemia": "hyperkalemia",
+    "hyponatraemia": "hyponatremia", "hypercalcaemia": "hypercalcemia",
+    "hypomagnesaemia": "hypomagnesemia", "hyperglycaemia": "hyperglycemia",
+    "hypoglycaemia": "hypoglycemia", "hyperprolactinaemia": "hyperprolactinemia",
+    "prolactinaemia": "prolactinemia",
+    "photosensitisation": "photosensitization",
+    "sensitisation": "sensitization",
 }
 
 # Load supplementary ICD-10 mappings extracted from reverse-engineered drugsheets.
@@ -1442,8 +1562,80 @@ _icd10_cache: dict[str, dict | None] = {}
 _ICD10_NLM_URL = "https://clinicaltables.nlm.nih.gov/api/icd10cm/v3/search"
 
 
+def _clean_condition_text(text: str) -> str:
+    """Aggressively clean a condition string for ICD-10 matching.
+
+    Strips bullets, BNF/EMC prefixes, qualifiers, and normalises formatting.
+    """
+    clean = text.strip()
+    # Normalise Unicode quotation marks and dashes to ASCII
+    clean = clean.replace("\u2018", "'").replace("\u2019", "'")  # curly single quotes
+    clean = clean.replace("\u201C", '"').replace("\u201D", '"')  # curly double quotes
+    clean = clean.replace("\u2013", "-").replace("\u2014", "-")  # en/em dashes
+    # Strip leading bullet/list markers
+    clean = re.sub(r"^[*\-\u2022\u2023\u2043\u25E6\u00B7\d.)+]+\s*", "", clean)
+    # Strip BNF structural prefixes
+    clean = re.sub(
+        r"^(?:general\s+)?(?:specific\s+)?(?:contraindications?|cautions?)"
+        r"(?:[,:]\s*(?:further\s+information:?\s*)?)?",
+        "", clean, flags=re.IGNORECASE,
+    ).strip()
+    # Strip "history of" / "family history of" / "risk factors for"
+    clean = re.sub(
+        r"^(?:(?:personal|family)\s+)?(?:history\s+of|risk\s+factors?\s+for)\s+",
+        "", clean, flags=re.IGNORECASE,
+    ).strip()
+    # Strip temporal/severity qualifiers
+    clean = re.sub(
+        r"\b(?:recent|uncorrected|uncompensated|corrected|concomitant|pre-existing)\b\s*",
+        "", clean, flags=re.IGNORECASE,
+    ).strip()
+    # Normalise QTc variants
+    clean = re.sub(r"\bQTc[-\s]*interval\b", "QT interval", clean, flags=re.IGNORECASE)
+    clean = re.sub(r"\bQTc\b", "QT", clean, flags=re.IGNORECASE)
+    # Remove parenthetical qualifiers
+    clean = re.sub(r"\(.*?\)", "", clean).strip()
+    return clean
+
+
+def _uk_to_us(term: str) -> str:
+    """Convert UK clinical spelling to US for NLM search."""
+    result = term
+    for uk, us in _UK_TO_US_SPELLING.items():
+        result = re.sub(re.escape(uk), us, result, flags=re.IGNORECASE)
+    return result
+
+
+def _nlm_query(search_term: str) -> dict | None:
+    """Single NLM API query. Returns {icd10_code, description} or None."""
+    if len(search_term.strip()) < 3:
+        return None
+    try:
+        import httpx as _httpx
+        resp = _httpx.get(
+            _ICD10_NLM_URL,
+            params={"sf": "code,name", "terms": search_term.strip(), "maxList": 7},
+            timeout=8.0,
+        )
+        if resp.status_code == 200:
+            data = resp.json()
+            matches = data[3] if len(data) > 3 else []
+            if matches:
+                best = matches[0]
+                return {"icd10_code": best[0], "description": best[1]}
+    except Exception as e:
+        logger.debug("NLM ICD-10 query failed for '%s': %s", search_term, e)
+    return None
+
+
 def lookup_icd10_nlm(condition: str) -> dict | None:
-    """Query the free US NLM ICD-10-CM API for the best matching code.
+    """Query the free US NLM ICD-10-CM API with multi-strategy search.
+
+    Tries progressively cleaned/translated search terms:
+    1. Cleaned original term
+    2. UK→US spelling conversion
+    3. Stripped severity/temporal qualifiers
+    4. Individual significant words (for compound conditions)
 
     Returns dict with 'icd10_code' and 'description', or None if no match.
     The API is completely free, no authentication required.
@@ -1453,37 +1645,63 @@ def lookup_icd10_nlm(condition: str) -> dict | None:
     if key in _icd10_cache:
         return _icd10_cache[key]
 
-    # Clean the condition text for a better search
-    search_term = re.sub(r"\(.*?\)", "", condition)  # remove parenthetical qualifiers
-    search_term = re.sub(r"(?:contraindication|caution):?\s*", "", search_term, flags=re.IGNORECASE)
-    search_term = search_term.strip()
+    # Strategy 1: cleaned original term
+    cleaned = _clean_condition_text(condition)
+    result = _nlm_query(cleaned)
+    if result:
+        _icd10_cache[key] = result
+        return result
 
-    if len(search_term) < 3:
-        _icd10_cache[key] = None
-        return None
+    # Strategy 2: UK→US spelling
+    us_term = _uk_to_us(cleaned)
+    if us_term != cleaned:
+        result = _nlm_query(us_term)
+        if result:
+            _icd10_cache[key] = result
+            return result
 
-    try:
-        import httpx as _httpx
-        resp = _httpx.get(
-            _ICD10_NLM_URL,
-            params={"sf": "code,name", "terms": search_term, "maxList": 5},
-            timeout=8.0,
-        )
-        if resp.status_code == 200:
-            data = resp.json()
-            total = data[0]
-            matches = data[3] if len(data) > 3 else []
-            if matches:
-                # Return the best match — NLM returns [code, description] pairs
-                best = matches[0]
-                result = {"icd10_code": best[0], "description": best[1]}
-                _icd10_cache[key] = result
-                return result
-    except Exception as e:
-        logger.debug("NLM ICD-10 lookup failed for '%s': %s", condition, e)
+    # Strategy 3: drop trailing/leading short words and retry
+    # e.g. "acute lymphocytic leukaemia" → "lymphocytic leukemia"
+    words = us_term.split()
+    if len(words) >= 3:
+        # Try dropping first word (often a qualifier like "acute", "chronic")
+        result = _nlm_query(" ".join(words[1:]))
+        if result:
+            _icd10_cache[key] = result
+            return result
+
+    # Strategy 4: try core noun phrase (last 2 significant words)
+    if len(words) >= 2:
+        result = _nlm_query(" ".join(words[-2:]))
+        if result:
+            _icd10_cache[key] = result
+            return result
 
     _icd10_cache[key] = None
     return None
+
+
+def _is_not_a_condition(text: str) -> bool:
+    """Return True if text looks like prescribing guidance rather than a clinical condition."""
+    t = text.lower()
+    # Prescribing guidance / administration instructions
+    if re.search(
+        r"\b(?:for relief of|with high doses|maintain adequate|as an antiemetic|"
+        r"if prescribed|should be|is recommended|see section|when used for|"
+        r"not recommended|to be given|do not use|before starting|treatment with|"
+        r"patients receiving|used in combination)\b", t,
+    ):
+        return True
+    # Starts with articles/prepositions (sentence fragments, not condition names)
+    if re.match(r"^(?:a |an |the |to |in |of |for |with |or |and )\b", t):
+        return True
+    # Too long to be a condition name (likely prose)
+    if len(text) > 100:
+        return True
+    # Too short after cleaning
+    if len(text.strip()) < 3:
+        return True
+    return False
 
 
 def map_condition_to_icd10(condition: str, kb: KnowledgeBase) -> dict:
@@ -1491,12 +1709,11 @@ def map_condition_to_icd10(condition: str, kb: KnowledgeBase) -> dict:
 
     1. Curated common-terms map (most reliable for broad clinical terms)
     2. Check local ICD10_usage.xlsx (existing PICS mappings)
-    3. Query free NLM ICD-10-CM API (for specific conditions)
+    3. Query free NLM ICD-10-CM API with multi-strategy search
     4. Fall back to [NEEDS ICD-10 MAPPING] for manual review
     """
-    # Clean condition text for matching
-    clean = re.sub(r"\(.*?\)", "", condition).strip().lower()
-    clean = re.sub(r"^(?:contraindication|caution):?\s*", "", clean).strip()
+    # Clean condition text for matching using shared cleaning function
+    clean = _clean_condition_text(condition).lower()
 
     # Tier 0: curated common-terms map (handles broad clinical terms correctly)
     # Check exact match first, then substring match
@@ -1519,9 +1736,11 @@ def map_condition_to_icd10(condition: str, kb: KnowledgeBase) -> dict:
             "confidence": "high",
         }
 
-    # Tier 2: free NLM API
+    # Tier 2: free NLM API (multi-strategy: cleaned, UK→US, qualifier-stripped)
     nlm = lookup_icd10_nlm(condition)
     if nlm:
+        # Save successful NLM lookups to the persistent map for future runs
+        save_icd10_mapping(clean, nlm["icd10_code"], nlm["description"])
         return {
             "icd10_code": nlm["icd10_code"],
             "description": nlm["description"],
@@ -1529,8 +1748,8 @@ def map_condition_to_icd10(condition: str, kb: KnowledgeBase) -> dict:
             "confidence": "medium",
         }
 
-    # Tier 3: no match — return enough context for Claude reasoning to pick up
-    logger.info("ICD-10 UNMAPPED: '%s' (cleaned: '%s') — needs Claude reasoning or manual review", condition, clean)
+    # Tier 3: no match — return enough context for manual review
+    logger.info("ICD-10 UNMAPPED: '%s' (cleaned: '%s') — needs manual review", condition, clean)
     return {
         "icd10_code": "[NEEDS ICD-10 MAPPING]",
         "description": "",
@@ -1612,6 +1831,8 @@ def analyze_contraindications(bnf_data: dict, emc_data: dict, kb: KnowledgeBase,
                 cond = cond.strip()
                 if len(cond) < 3 or cond.lower() in ["contraindications", "cautions"]:
                     continue
+                if _is_not_a_condition(cond):
+                    continue
                 icd = map_condition_to_icd10(cond, kb)
                 items.append({
                     "type": section_key.rstrip("s"),  # "contraindication" or "caution"
@@ -1634,8 +1855,13 @@ def analyze_contraindications(bnf_data: dict, emc_data: dict, kb: KnowledgeBase,
             cond = cond.strip()
             if len(cond) < 5:
                 continue
+            if _is_not_a_condition(cond):
+                continue
+            # Normalise for dedup: strip bullets/formatting before comparing
+            cond_normalised = _clean_condition_text(cond).lower()
             already = any(
-                cond.lower()[:20] in item["condition"].lower()
+                cond_normalised[:20] in _clean_condition_text(item["condition"]).lower()
+                or _clean_condition_text(item["condition"]).lower() in cond_normalised
                 for item in items
             )
             if not already:
@@ -1666,8 +1892,12 @@ def analyze_contraindications(bnf_data: dict, emc_data: dict, kb: KnowledgeBase,
             cond = cond.strip()
             if len(cond) < 5 or len(cond) > 80:
                 continue
+            if _is_not_a_condition(cond):
+                continue
+            cond_normalised = _clean_condition_text(cond).lower()
             already = any(
-                cond.lower()[:15] in item["condition"].lower()
+                cond_normalised[:15] in _clean_condition_text(item["condition"]).lower()
+                or _clean_condition_text(item["condition"]).lower()[:15] in cond_normalised
                 for item in items
             )
             if not already:
